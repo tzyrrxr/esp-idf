@@ -11,13 +11,17 @@
 #include "hal/gpio_types.h"
 #include "sdkconfig.h"
 
-#if !CONFIG_IDF_TARGET_ESP32P4  //TODO: IDF-7532
+#if !CONFIG_IDF_TARGET_ESP32P4 && ! CONFIG_IDF_TARGET_ESP32C5 //TODO: IDF-7532, [ESP32C5] IDF-8636
 #if !SOC_LP_TIMER_SUPPORTED
 #include "hal/rtc_cntl_ll.h"
 #endif
-#endif  //#if !CONFIG_IDF_TARGET_ESP32P4
+#endif  //#if !CONFIG_IDF_TARGET_ESP32P4 && ! CONFIG_IDF_TARGET_ESP32C5
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
 #include "hal/rtc_io_ll.h"
+#endif
+
+#if SOC_LP_AON_SUPPORTED
+#include "hal/lp_aon_ll.h"
 #endif
 
 #ifdef __cplusplus
@@ -51,16 +55,19 @@ typedef struct rtc_cntl_sleep_retent {
 
 #if SOC_PM_SUPPORT_EXT1_WAKEUP
 
+#if SOC_LP_AON_SUPPORTED
+#define rtc_hal_ext1_get_wakeup_status()                    lp_aon_ll_ext1_get_wakeup_status()
+#define rtc_hal_ext1_clear_wakeup_status()                  lp_aon_ll_ext1_clear_wakeup_status()
+#define rtc_hal_ext1_set_wakeup_pins(io_mask, mode_mask)    lp_aon_ll_ext1_set_wakeup_pins(io_mask, mode_mask)
+#define rtc_hal_ext1_clear_wakeup_pins()                    lp_aon_ll_ext1_clear_wakeup_pins()
+#define rtc_hal_ext1_get_wakeup_pins()                      lp_aon_ll_ext1_get_wakeup_pins()
+#else
 #define rtc_hal_ext1_get_wakeup_status()                    rtc_cntl_ll_ext1_get_wakeup_status()
-
 #define rtc_hal_ext1_clear_wakeup_status()                  rtc_cntl_ll_ext1_clear_wakeup_status()
-
 #define rtc_hal_ext1_set_wakeup_pins(io_mask, mode_mask)    rtc_cntl_ll_ext1_set_wakeup_pins(io_mask, mode_mask)
-
 #define rtc_hal_ext1_clear_wakeup_pins()                    rtc_cntl_ll_ext1_clear_wakeup_pins()
-
 #define rtc_hal_ext1_get_wakeup_pins()                      rtc_cntl_ll_ext1_get_wakeup_pins()
-
+#endif
 #endif // SOC_PM_SUPPORT_EXT1_WAKEUP
 
 #if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP && (SOC_RTCIO_PIN_COUNT == 0)

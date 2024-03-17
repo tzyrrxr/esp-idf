@@ -254,7 +254,13 @@ RTC peripherals or RTC memories do not need to be powered on during sleep in thi
 
     .. only:: SOC_PM_SUPPORT_EXT1_WAKEUP_MODE_PER_PIN
 
-        The RTC controller also supports triggering wakeup, allowing configurable IO to use different wakeup levels simultaneously. This can be configured with :cpp:func`esp_sleep_enable_ext1_wakeup_io`.
+        The RTC controller also supports triggering wakeup, allowing configurable IO to use different wakeup levels simultaneously. This can be configured with :cpp:func:`esp_sleep_enable_ext1_wakeup_io`.
+
+    .. only:: not SOC_PM_SUPPORT_EXT1_WAKEUP_MODE_PER_PIN
+
+        .. note::
+
+           Due to hardware limitation, when we use more than one IO for EXT1 wakeup, it is not allowed to configure different wakeup levels for the IOs, and there is corresponding inspection mechanism in :cpp:func:`esp_sleep_enable_ext1_wakeup_io`.
 
     .. warning::
 
@@ -319,6 +325,8 @@ UART Wakeup (Light-sleep Only)
 When {IDF_TARGET_NAME} receives UART input from external devices, it is often necessary to wake up the chip when input data is available. The UART peripheral contains a feature which allows waking up the chip from Light-sleep when a certain number of positive edges on RX pin are seen. This number of positive edges can be set using :cpp:func:`uart_set_wakeup_threshold` function. Note that the character which triggers wakeup (and any characters before it) will not be received by the UART after wakeup. This means that the external device typically needs to send an extra character to the {IDF_TARGET_NAME} to trigger wakeup before sending the data.
 
 :cpp:func:`esp_sleep_enable_uart_wakeup` function can be used to enable this wakeup source.
+
+After waking-up from UART, you should send some extra data through the UART port in Active mode, so that the internal wakeup indication signal can be cleared. Otherwises, the next UART wake-up would trigger with two less rising edges than the configured threshold value.
 
     .. only:: esp32c6 or esp32h2
 
@@ -401,7 +409,7 @@ Some {IDF_TARGET_NAME} IOs have internal pullups or pulldowns, which are enabled
 
     Add the following code before :cpp:func:`esp_deep_sleep_start` to remove such extra current::
 
-	rtc_gpio_isolate(GPIO_NUM_12);
+        rtc_gpio_isolate(GPIO_NUM_12);
 
 .. only:: esp32c2 or esp32c3
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2017-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2017-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -40,7 +40,7 @@ static const char *TAG = "esp_timer_systimer";
 
 /* Interrupt handle returned by the interrupt allocator */
 #ifdef CONFIG_ESP_TIMER_ISR_AFFINITY_NO_AFFINITY
-#define ISR_HANDLERS (portNUM_PROCESSORS)
+#define ISR_HANDLERS (CONFIG_FREERTOS_NUMBER_OF_CORES)
 #else
 #define ISR_HANDLERS (1)
 #endif
@@ -112,10 +112,10 @@ static void IRAM_ATTR timer_alarm_isr(void *arg)
                 (*s_alarm_handler)(arg);
 
                 portENTER_CRITICAL_ISR(&s_time_update_lock);
-               // Another alarm could have occurred while were handling the previous alarm.
-               // Check if we need to call the s_alarm_handler again:
-               //   1) if the alarm has already been fired, it helps to handle it immediately without an additional ISR call.
-               //   2) handle pending alarm that was cleared by the other core in time when this core worked with the current alarm.
+                // Another alarm could have occurred while were handling the previous alarm.
+                // Check if we need to call the s_alarm_handler again:
+                //   1) if the alarm has already been fired, it helps to handle it immediately without an additional ISR call.
+                //   2) handle pending alarm that was cleared by the other core in time when this core worked with the current alarm.
             } while (systimer_ll_is_alarm_int_fired(systimer_hal.dev, SYSTIMER_ALARM_ESPTIMER) || pending_alarm);
             processed_by = NOT_USED;
         } else {

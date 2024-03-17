@@ -495,8 +495,7 @@ esp_netif_t* esp_netif_get_handle_from_netif_impl(void *dev)
 
 void* esp_netif_get_netif_impl(esp_netif_t *esp_netif)
 {
-    // get impl ptr only for vanilla lwip impl (ppp_pcb not supported)
-    if (esp_netif && !ESP_NETIF_IS_POINT2POINT_TYPE(esp_netif, PPP_LWIP_NETIF)) {
+    if (esp_netif) {
         return esp_netif->lwip_netif;
     }
     return NULL;
@@ -2616,8 +2615,15 @@ static esp_err_t esp_netif_add_ip6_address_api(esp_netif_api_msg_t *msg)
     return error;
 }
 
-esp_err_t esp_netif_add_ip6_address(esp_netif_t *esp_netif, const ip_event_add_ip6_t *addr)
+static esp_err_t esp_netif_add_ip6_address_priv(esp_netif_t *esp_netif, const ip_event_add_ip6_t *addr)
     _RUN_IN_LWIP_TASK(esp_netif_add_ip6_address_api, esp_netif, addr)
+
+esp_err_t esp_netif_add_ip6_address(esp_netif_t *esp_netif, const esp_ip6_addr_t addr, bool preferred)
+{
+    const ip_event_add_ip6_t addr_evt = {.addr = addr, .preferred = preferred};
+
+    return esp_netif_add_ip6_address_priv(esp_netif, &addr_evt);
+}
 
 static esp_err_t esp_netif_remove_ip6_address_api(esp_netif_api_msg_t *msg)
 {

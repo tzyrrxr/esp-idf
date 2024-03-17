@@ -47,6 +47,10 @@
 #include "hal/cache_hal.h"
 #include "hal/cache_ll.h"
 
+#if CONFIG_PM_ENABLE && SOC_PM_SUPPORT_TOP_PD
+#include "esp_private/gdma_sleep_retention.h"
+#endif
+
 static const char *TAG = "gdma";
 
 #if !SOC_RCC_IS_INDEPENDENT
@@ -213,9 +217,6 @@ esp_err_t gdma_new_ahb_channel(const gdma_channel_alloc_config_t *config, gdma_c
     };
     return do_allocate_gdma_channel(&search_info, config, ret_chan);
 }
-
-esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_channel_handle_t *ret_chan)
-__attribute__((alias("gdma_new_ahb_channel")));
 #endif // SOC_AHB_GDMA_SUPPORTED
 
 #if SOC_AXI_GDMA_SUPPORTED
@@ -231,6 +232,14 @@ esp_err_t gdma_new_axi_channel(const gdma_channel_alloc_config_t *config, gdma_c
     return do_allocate_gdma_channel(&search_info, config, ret_chan);
 }
 #endif // SOC_AXI_GDMA_SUPPORTED
+
+#if SOC_AHB_GDMA_SUPPORTED
+esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_channel_handle_t *ret_chan)
+__attribute__((alias("gdma_new_ahb_channel")));
+#elif SOC_AXI_GDMA_SUPPORTED
+esp_err_t gdma_new_channel(const gdma_channel_alloc_config_t *config, gdma_channel_handle_t *ret_chan)
+__attribute__((alias("gdma_new_axi_channel")));
+#endif
 
 esp_err_t gdma_del_channel(gdma_channel_handle_t dma_chan)
 {
@@ -358,15 +367,15 @@ esp_err_t gdma_set_transfer_ability(gdma_channel_handle_t dma_chan, const gdma_t
     ESP_RETURN_ON_FALSE((sram_alignment & (sram_alignment - 1)) == 0, ESP_ERR_INVALID_ARG,
                         TAG, "invalid sram alignment: %zu", sram_alignment);
 
-    uint32_t data_cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA);
+    uint32_t ext_mem_cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA);
     if (psram_alignment == 0) {
         // fall back to use the same size of the psram data cache line size
-        psram_alignment = data_cache_line_size;
+        psram_alignment = ext_mem_cache_line_size;
     }
-    if (psram_alignment > data_cache_line_size) {
-        ESP_RETURN_ON_FALSE(((psram_alignment % data_cache_line_size) == 0), ESP_ERR_INVALID_ARG,
-                            TAG, "psram_alignment(%d) should be multiple of the data_cache_line_size(%"PRIu32")",
-                            psram_alignment, data_cache_line_size);
+    if (psram_alignment > ext_mem_cache_line_size) {
+        ESP_RETURN_ON_FALSE(((psram_alignment % ext_mem_cache_line_size) == 0), ESP_ERR_INVALID_ARG,
+                            TAG, "psram_alignment(%d) should be multiple of the ext_mem_cache_line_size(%"PRIu32")",
+                            psram_alignment, ext_mem_cache_line_size);
     }
 
     // if the DMA can't access the PSRAM, this HAL function is no-op
@@ -689,6 +698,9 @@ static void gdma_release_pair_handle(gdma_pair_t *pair)
 
     if (do_deinitialize) {
         free(pair);
+#if CONFIG_PM_ENABLE && SOC_PM_SUPPORT_TOP_PD
+        gdma_sleep_retention_deinit(group->group_id, pair_id);
+#endif
         ESP_LOGD(TAG, "del pair (%d,%d)", group->group_id, pair_id);
         gdma_release_group_handle(group);
     }
@@ -726,6 +738,9 @@ static gdma_pair_t *gdma_acquire_pair_handle(gdma_group_t *group, int pair_id)
         s_platform.group_ref_counts[group->group_id]++;
         portEXIT_CRITICAL(&s_platform.spinlock);
 
+#if CONFIG_PM_ENABLE && SOC_PM_SUPPORT_TOP_PD
+        gdma_sleep_retention_init(group->group_id, pair_id);
+#endif
         ESP_LOGD(TAG, "new pair (%d,%d) at %p", group->group_id, pair_id, pair);
     } else {
         free(pre_alloc_pair);

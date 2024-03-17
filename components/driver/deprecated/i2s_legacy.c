@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -29,6 +29,11 @@
 #include "hal/clk_tree_ll.h"
 #endif
 
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#include "hal/cache_hal.h"
+#include "hal/cache_ll.h"
+#endif
+
 #if SOC_I2S_SUPPORTS_DAC
 #include "hal/dac_ll.h"
 #include "hal/dac_types.h"
@@ -56,6 +61,12 @@
 #include "esp_pm.h"
 #include "esp_efuse.h"
 #include "esp_rom_gpio.h"
+#include "esp_dma_utils.h"
+
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#include "esp_cache.h"
+#endif
+
 #include "esp_private/i2s_platform.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/esp_clk.h"
@@ -178,25 +189,28 @@ static bool IRAM_ATTR i2s_dma_rx_callback(gdma_channel_handle_t dma_chan, gdma_e
     BaseType_t tmp = 0;
     int dummy;
     i2s_event_t i2s_event;
-    uint32_t finish_desc;
+    lldesc_t *finish_desc;
 
     if (p_i2s->rx) {
-        finish_desc = event_data->rx_eof_desc_addr;
-        i2s_event.size = ((lldesc_t *)finish_desc)->size;
+        finish_desc = (lldesc_t *)event_data->rx_eof_desc_addr;
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        esp_cache_msync((void *)finish_desc->buf, p_i2s->rx->buf_size, ESP_CACHE_MSYNC_FLAG_INVALIDATE);
+#endif
+        i2s_event.size = finish_desc->size;
         if (xQueueIsQueueFullFromISR(p_i2s->rx->queue)) {
             xQueueReceiveFromISR(p_i2s->rx->queue, &dummy, &tmp);
             need_awoke |= tmp;
             if (p_i2s->i2s_queue) {
                 i2s_event.type = I2S_EVENT_RX_Q_OVF;
-                xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+                xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
                 need_awoke |= tmp;
             }
         }
-        xQueueSendFromISR(p_i2s->rx->queue, &(((lldesc_t *)finish_desc)->buf), &tmp);
+        xQueueSendFromISR(p_i2s->rx->queue, &finish_desc->buf, &tmp);
         need_awoke |= tmp;
         if (p_i2s->i2s_queue) {
             i2s_event.type = I2S_EVENT_RX_DONE;
-            xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+            xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
             need_awoke |= tmp;
         }
     }
@@ -210,28 +224,32 @@ static bool IRAM_ATTR i2s_dma_tx_callback(gdma_channel_handle_t dma_chan, gdma_e
     BaseType_t tmp = 0;
     int dummy;
     i2s_event_t i2s_event;
-    uint32_t finish_desc;
+    lldesc_t *finish_desc;
     if (p_i2s->tx) {
-        finish_desc = event_data->tx_eof_desc_addr;
-        i2s_event.size = ((lldesc_t *)finish_desc)->size;
+        finish_desc = (lldesc_t *)event_data->tx_eof_desc_addr;
+        i2s_event.size = finish_desc->size;
         if (xQueueIsQueueFullFromISR(p_i2s->tx->queue)) {
             xQueueReceiveFromISR(p_i2s->tx->queue, &dummy, &tmp);
             need_awoke |= tmp;
             if (p_i2s->i2s_queue) {
                 i2s_event.type = I2S_EVENT_TX_Q_OVF;
                 i2s_event.size = p_i2s->tx->buf_size;
-                xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+                xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
                 need_awoke |= tmp;
             }
         }
         if (p_i2s->tx_desc_auto_clear) {
-            memset((void *) (((lldesc_t *)finish_desc)->buf), 0, p_i2s->tx->buf_size);
+            uint8_t *sent_buf = (uint8_t *)finish_desc->buf;
+            memset(sent_buf, 0, p_i2s->tx->buf_size);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+            esp_cache_msync(sent_buf, p_i2s->tx->buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#endif
         }
-        xQueueSendFromISR(p_i2s->tx->queue, &(((lldesc_t *)finish_desc)->buf), &tmp);
+        xQueueSendFromISR(p_i2s->tx->queue, &finish_desc->buf, &tmp);
         need_awoke |= tmp;
         if (p_i2s->i2s_queue) {
             i2s_event.type = I2S_EVENT_TX_DONE;
-            xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+            xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
             need_awoke |= tmp;
         }
     }
@@ -254,14 +272,14 @@ static void IRAM_ATTR i2s_intr_handler_default(void *arg)
     BaseType_t tmp = 0;
     uint32_t  finish_desc = 0;
     if ((status & I2S_LL_EVENT_TX_DSCR_ERR) || (status & I2S_LL_EVENT_RX_DSCR_ERR)) {
-        ESP_EARLY_LOGE(TAG, "dma error, interrupt status: 0x%08x", status);
+        ESP_EARLY_LOGE(TAG, "dma error, interrupt status: 0x%08" PRIx32, status);
         if (p_i2s->i2s_queue) {
             i2s_event.type = I2S_EVENT_DMA_ERROR;
             if (xQueueIsQueueFullFromISR(p_i2s->i2s_queue)) {
                 xQueueReceiveFromISR(p_i2s->i2s_queue, &dummy, &tmp);
                 need_awoke |= tmp;
             }
-            xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+            xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
             need_awoke |= tmp;
         }
     }
@@ -275,7 +293,7 @@ static void IRAM_ATTR i2s_intr_handler_default(void *arg)
             need_awoke |= tmp;
             if (p_i2s->i2s_queue) {
                 i2s_event.type = I2S_EVENT_TX_Q_OVF;
-                xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+                xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
                 need_awoke |= tmp;
             }
         }
@@ -289,7 +307,7 @@ static void IRAM_ATTR i2s_intr_handler_default(void *arg)
         need_awoke |= tmp;
         if (p_i2s->i2s_queue) {
             i2s_event.type = I2S_EVENT_TX_DONE;
-            xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+            xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
             need_awoke |= tmp;
         }
     }
@@ -303,7 +321,7 @@ static void IRAM_ATTR i2s_intr_handler_default(void *arg)
             need_awoke |= tmp;
             if (p_i2s->i2s_queue) {
                 i2s_event.type = I2S_EVENT_RX_Q_OVF;
-                xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+                xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
                 need_awoke |= tmp;
             }
         }
@@ -311,7 +329,7 @@ static void IRAM_ATTR i2s_intr_handler_default(void *arg)
         need_awoke |= tmp;
         if (p_i2s->i2s_queue) {
             i2s_event.type = I2S_EVENT_RX_DONE;
-            xQueueSendFromISR(p_i2s->i2s_queue, (void * )&i2s_event, &tmp);
+            xQueueSendFromISR(p_i2s->i2s_queue, (void *)&i2s_event, &tmp);
             need_awoke |= tmp;
         }
     }
@@ -342,7 +360,7 @@ static esp_err_t i2s_dma_intr_init(i2s_port_t i2s_num, int intr_flag)
 
     /* Set GDMA config */
     gdma_channel_alloc_config_t dma_cfg = {};
-    if ( p_i2s[i2s_num]->dir & I2S_DIR_TX) {
+    if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
         dma_cfg.direction = GDMA_CHANNEL_DIRECTION_TX;
         /* Register a new GDMA tx channel */
         ESP_RETURN_ON_ERROR(gdma_new_channel(&dma_cfg, &p_i2s[i2s_num]->tx_dma_chan), TAG, "Register tx dma channel error");
@@ -351,7 +369,7 @@ static esp_err_t i2s_dma_intr_init(i2s_port_t i2s_num, int intr_flag)
         /* Set callback function for GDMA, the interrupt is triggered by GDMA, then the GDMA ISR will call the  callback function */
         gdma_register_tx_event_callbacks(p_i2s[i2s_num]->tx_dma_chan, &cb, p_i2s[i2s_num]);
     }
-    if ( p_i2s[i2s_num]->dir & I2S_DIR_RX) {
+    if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
         dma_cfg.direction = GDMA_CHANNEL_DIRECTION_RX;
         /* Register a new GDMA rx channel */
         ESP_RETURN_ON_ERROR(gdma_new_channel(&dma_cfg, &p_i2s[i2s_num]->rx_dma_chan), TAG, "Register rx dma channel error");
@@ -499,7 +517,35 @@ static inline uint32_t i2s_get_buf_size(i2s_port_t i2s_num)
     uint32_t bytes_per_frame = bytes_per_sample * p_i2s[i2s_num]->active_slot;
     p_i2s[i2s_num]->dma_frame_num = (p_i2s[i2s_num]->dma_frame_num * bytes_per_frame > I2S_DMA_BUFFER_MAX_SIZE) ?
                                     I2S_DMA_BUFFER_MAX_SIZE / bytes_per_frame : p_i2s[i2s_num]->dma_frame_num;
-    return p_i2s[i2s_num]->dma_frame_num * bytes_per_frame;
+    uint32_t bufsize = p_i2s[i2s_num]->dma_frame_num * bytes_per_frame;
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    /* bufsize need to align with cache line size */
+    uint32_t alignment = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_INT_MEM, CACHE_TYPE_DATA);
+    uint32_t aligned_frame_num = p_i2s[i2s_num]->dma_frame_num;
+    /* To make the buffer aligned with the cache line size, search for the ceil aligned size first,
+       If the buffer size exceed the max DMA buffer size, toggle the sign to search for the floor aligned size */
+    for (int sign = 1; bufsize % alignment != 0; aligned_frame_num += sign) {
+        bufsize = aligned_frame_num * bytes_per_frame;
+        /* If the buffer size exceed the max dma size */
+        if (bufsize > I2S_DMA_BUFFER_MAX_SIZE) {
+            sign = -1; // toggle the search sign
+            aligned_frame_num = p_i2s[i2s_num]->dma_frame_num;              // Reset the frame num
+            bufsize = aligned_frame_num * bytes_per_frame;  // Reset the bufsize
+        }
+    }
+    if (bufsize / bytes_per_frame != p_i2s[i2s_num]->dma_frame_num) {
+        ESP_LOGW(TAG, "dma frame num is adjusted to %"PRIu32" to algin the dma buffer with %"PRIu32
+                 ", bufsize = %"PRIu32, bufsize / bytes_per_frame, alignment, bufsize);
+    }
+#else
+    /* Limit DMA buffer size if it is out of range (DMA buffer limitation is 4092 bytes) */
+    if (bufsize > I2S_DMA_BUFFER_MAX_SIZE) {
+        uint32_t frame_num = I2S_DMA_BUFFER_MAX_SIZE / bytes_per_frame;
+        bufsize = frame_num * bytes_per_frame;
+        ESP_LOGW(TAG, "dma frame num is out of dma buffer size, limited to %"PRIu32, frame_num);
+    }
+#endif
+    return bufsize;
 }
 
 static esp_err_t i2s_delete_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
@@ -526,15 +572,17 @@ static esp_err_t i2s_alloc_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
     ESP_GOTO_ON_FALSE(dma_obj, ESP_ERR_INVALID_ARG, err, TAG, "I2S DMA object can't be NULL");
 
     uint32_t buf_cnt = p_i2s[i2s_num]->dma_desc_num;
+    size_t desc_size = 0;
     for (int cnt = 0; cnt < buf_cnt; cnt++) {
         /* Allocate DMA buffer */
-        dma_obj->buf[cnt] = (char *) heap_caps_calloc(dma_obj->buf_size, sizeof(char), MALLOC_CAP_DMA);
+        esp_dma_calloc(1, sizeof(char) * dma_obj->buf_size, (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA), (void **)&dma_obj->buf[cnt], NULL);
         ESP_GOTO_ON_FALSE(dma_obj->buf[cnt], ESP_ERR_NO_MEM, err, TAG, "Error malloc dma buffer");
-        /* Initialize DMA buffer to 0 */
-        memset(dma_obj->buf[cnt], 0, dma_obj->buf_size);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        esp_cache_msync(dma_obj->buf[cnt], dma_obj->buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#endif
 
-        /* Allocate DMA descpriptor */
-        dma_obj->desc[cnt] = (lldesc_t *) heap_caps_calloc(1, sizeof(lldesc_t), MALLOC_CAP_DMA);
+        /* Allocate DMA descriptor */
+        esp_dma_calloc(1, sizeof(lldesc_t), MALLOC_CAP_DEFAULT, (void **)&dma_obj->desc[cnt], &desc_size);
         ESP_GOTO_ON_FALSE(dma_obj->desc[cnt], ESP_ERR_NO_MEM, err, TAG,  "Error malloc dma description entry");
     }
     /* DMA descriptor must be initialize after all descriptor has been created, otherwise they can't be linked together as a chain */
@@ -549,6 +597,9 @@ static esp_err_t i2s_alloc_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
         dma_obj->desc[cnt]->offset = 0;
         /* Link to the next descriptor */
         dma_obj->desc[cnt]->empty = (uint32_t)((cnt < (buf_cnt - 1)) ? (dma_obj->desc[cnt + 1]) : dma_obj->desc[0]);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        esp_cache_msync(dma_obj->desc[cnt], desc_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#endif
     }
     if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
         i2s_ll_rx_set_eof_num(p_i2s[i2s_num]->hal.dev, dma_obj->buf_size);
@@ -642,7 +693,7 @@ err:
 /*-------------------------------------------------------------
                    I2S clock operation
   -------------------------------------------------------------*/
-  // [clk_tree] TODO: replace the following switch table by clk_tree API
+// [clk_tree] TODO: replace the following switch table by clk_tree API
 static uint32_t i2s_config_source_clock(i2s_port_t i2s_num, bool use_apll, uint32_t mclk)
 {
 #if SOC_I2S_SUPPORTS_APLL
@@ -792,7 +843,6 @@ static esp_err_t i2s_calculate_common_clock(int i2s_num, i2s_hal_clock_info_t *c
 
     return ESP_OK;
 }
-
 
 static esp_err_t i2s_calculate_clock(i2s_port_t i2s_num, i2s_hal_clock_info_t *clk_info)
 {
@@ -945,7 +995,6 @@ static esp_err_t i2s_check_cfg_validity(i2s_port_t i2s_num, const i2s_config_t *
     ESP_RETURN_ON_FALSE((cfg->dma_desc_num >= 2 && cfg->dma_desc_num <= 128), ESP_ERR_INVALID_ARG, TAG, "I2S buffer count less than 128 and more than 2");
     ESP_RETURN_ON_FALSE((cfg->dma_frame_num >= 8 && cfg->dma_frame_num <= 1024), ESP_ERR_INVALID_ARG, TAG, "I2S buffer length at most 1024 and more than 8");
 
-
 #if SOC_I2S_SUPPORTS_PDM_TX || SOC_I2S_SUPPORTS_PDM_RX
     /* Check PDM mode */
     if (cfg->mode & I2S_MODE_PDM) {
@@ -990,22 +1039,22 @@ static void i2s_set_slot_legacy(i2s_port_t i2s_num)
     }
     if (p_i2s[i2s_num]->mode == I2S_COMM_MODE_STD) {
         if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
-            i2s_hal_std_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_std_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
         if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
-            i2s_hal_std_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_std_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
     }
 #if SOC_I2S_SUPPORTS_PDM
     else if (p_i2s[i2s_num]->mode == I2S_COMM_MODE_PDM) {
 #if SOC_I2S_SUPPORTS_PDM_TX
         if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
-            i2s_hal_pdm_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_pdm_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
 #endif
 #if SOC_I2S_SUPPORTS_PDM_RX
         if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
-            i2s_hal_pdm_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_pdm_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
 #endif
     }
@@ -1013,10 +1062,10 @@ static void i2s_set_slot_legacy(i2s_port_t i2s_num)
 #if SOC_I2S_SUPPORTS_TDM
     else if (p_i2s[i2s_num]->mode == I2S_COMM_MODE_TDM) {
         if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
-            i2s_hal_tdm_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_tdm_set_tx_slot(&(p_i2s[i2s_num]->hal), is_tx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
         if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
-            i2s_hal_tdm_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg) );
+            i2s_hal_tdm_set_rx_slot(&(p_i2s[i2s_num]->hal), is_rx_slave, (i2s_hal_slot_config_t *)(&p_i2s[i2s_num]->slot_cfg));
         }
     }
 #endif
@@ -1273,7 +1322,7 @@ static void i2s_mode_identify(i2s_port_t i2s_num, const i2s_config_t *i2s_config
 
 #if SOC_I2S_SUPPORTS_ADC_DAC
     if ((i2s_config->mode & I2S_MODE_DAC_BUILT_IN) ||
-        (i2s_config->mode & I2S_MODE_ADC_BUILT_IN)) {
+            (i2s_config->mode & I2S_MODE_ADC_BUILT_IN)) {
         p_i2s[i2s_num]->mode = (i2s_comm_mode_t)I2S_COMM_MODE_ADC_DAC;
     }
 #endif // SOC_I2S_SUPPORTS_ADC_DAC
@@ -1286,7 +1335,7 @@ static esp_err_t i2s_config_transfer(i2s_port_t i2s_num, const i2s_config_t *i2s
     /* Convert legacy configuration into general part of slot and clock configuration */
     p_i2s[i2s_num]->slot_cfg.data_bit_width = i2s_config->bits_per_sample;
     p_i2s[i2s_num]->slot_cfg.slot_bit_width = (int)i2s_config->bits_per_chan < (int)i2s_config->bits_per_sample ?
-            i2s_config->bits_per_sample : i2s_config->bits_per_chan;
+                                              i2s_config->bits_per_sample : i2s_config->bits_per_chan;
 
     p_i2s[i2s_num]->slot_cfg.slot_mode = i2s_config->channel_format < I2S_CHANNEL_FMT_ONLY_RIGHT ?
                                          I2S_SLOT_MODE_STEREO : I2S_SLOT_MODE_MONO;
@@ -1586,7 +1635,6 @@ esp_err_t i2s_driver_uninstall(i2s_port_t i2s_num)
     return ESP_OK;
 }
 
-
 esp_err_t i2s_driver_install(i2s_port_t i2s_num, const i2s_config_t *i2s_config, int queue_size, void *i2s_queue)
 {
 #if CONFIG_I2S_ENABLE_DEBUG_LOG
@@ -1659,7 +1707,7 @@ esp_err_t i2s_write(i2s_port_t i2s_num, const void *src, size_t size, size_t *by
             }
             p_i2s[i2s_num]->tx->rw_pos = 0;
         }
-        ESP_LOGD(TAG, "size: %d, rw_pos: %d, buf_size: %d, curr_ptr: %d", size, p_i2s[i2s_num]->tx->rw_pos, p_i2s[i2s_num]->tx->buf_size, (int)p_i2s[i2s_num]->tx->curr_ptr);
+        ESP_LOGD(TAG, "size: %d, rw_pos: %d, buf_size: %d, curr_ptr: %p", size, p_i2s[i2s_num]->tx->rw_pos, p_i2s[i2s_num]->tx->buf_size, p_i2s[i2s_num]->tx->curr_ptr);
         data_ptr = (char *)p_i2s[i2s_num]->tx->curr_ptr;
         data_ptr += p_i2s[i2s_num]->tx->rw_pos;
         bytes_can_write = p_i2s[i2s_num]->tx->buf_size - p_i2s[i2s_num]->tx->rw_pos;
@@ -1667,6 +1715,9 @@ esp_err_t i2s_write(i2s_port_t i2s_num, const void *src, size_t size, size_t *by
             bytes_can_write = size;
         }
         memcpy(data_ptr, src_byte, bytes_can_write);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        esp_cache_msync((void *)(p_i2s[i2s_num]->tx->curr_ptr), p_i2s[i2s_num]->tx->buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#endif
         size -= bytes_can_write;
         src_byte += bytes_can_write;
         p_i2s[i2s_num]->tx->rw_pos += bytes_can_write;
@@ -1737,6 +1788,9 @@ esp_err_t i2s_write_expand(i2s_port_t i2s_num, const void *src, size_t size, siz
             memcpy(&data_ptr[j], (const char *)(src + *bytes_written), aim_bytes - zero_bytes);
             (*bytes_written) += (aim_bytes - zero_bytes);
         }
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        esp_cache_msync((void *)p_i2s[i2s_num]->tx->curr_ptr, p_i2s[i2s_num]->tx->buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+#endif
         size -= bytes_can_write;
         p_i2s[i2s_num]->tx->rw_pos += bytes_can_write;
     }

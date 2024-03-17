@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: CC0-1.0
  */
@@ -8,9 +8,12 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "esp_crypto_lock.h"
+#include "esp_efuse_chip.h"
 #include "esp_private/esp_crypto_lock_internal.h"
 #include "esp_random.h"
 #include "hal/clk_gate_ll.h"
+#include "hal/ecc_ll.h"
 #include "hal/ecdsa_hal.h"
 #include "hal/ecdsa_ll.h"
 #include "hal/ecdsa_types.h"
@@ -19,9 +22,17 @@
 #include "unity_fixture.h"
 
 #include "ecdsa_params.h"
+#include "hal_crypto_common.h"
 
 static void ecdsa_enable_and_reset(void)
 {
+    esp_crypto_ecdsa_lock_acquire();
+
+    ECC_RCC_ATOMIC() {
+        ecc_ll_enable_bus_clock(true);
+        ecc_ll_reset_register();
+    }
+
     ECDSA_RCC_ATOMIC() {
         ecdsa_ll_enable_bus_clock(true);
         ecdsa_ll_reset_register();
@@ -30,9 +41,15 @@ static void ecdsa_enable_and_reset(void)
 
 static void ecdsa_disable(void)
 {
+    ECC_RCC_ATOMIC() {
+        ecc_ll_enable_bus_clock(false);
+    }
+
     ECDSA_RCC_ATOMIC() {
         ecdsa_ll_enable_bus_clock(false);
     }
+
+    esp_crypto_ecdsa_lock_release();
 }
 
 static void ecc_be_to_le(const uint8_t* be_point, uint8_t *le_point, uint8_t len)
@@ -125,13 +142,13 @@ static void test_ecdsa_sign(bool is_p256, uint8_t* sha, uint8_t* r_le, uint8_t* 
     if (is_p256) {
         conf.curve = ECDSA_CURVE_SECP256R1;
         if (use_km_key == 0) {
-            conf.efuse_key_blk = 6;
+            conf.efuse_key_blk = EFUSE_BLK_KEY0 + ECDSA_KEY_BLOCK_2;
         }
         len = 32;
     } else {
         conf.curve = ECDSA_CURVE_SECP192R1;
         if (use_km_key == 0) {
-            conf.efuse_key_blk = 5;
+            conf.efuse_key_blk = EFUSE_BLK_KEY0 + ECDSA_KEY_BLOCK_1;
         }
         len = 24;
     }
@@ -172,13 +189,13 @@ static void test_ecdsa_export_pubkey(bool is_p256, bool use_km_key)
     if (is_p256) {
         conf.curve = ECDSA_CURVE_SECP256R1;
         if (use_km_key == 0) {
-            conf.efuse_key_blk = 6;
+            conf.efuse_key_blk = EFUSE_BLK_KEY0 + ECDSA_KEY_BLOCK_2;
         }
         len = 32;
     } else {
         conf.curve = ECDSA_CURVE_SECP192R1;
         if (use_km_key == 0) {
-            conf.efuse_key_blk = 5;
+            conf.efuse_key_blk = EFUSE_BLK_KEY0 + ECDSA_KEY_BLOCK_1;
         }
         len = 24;
     }

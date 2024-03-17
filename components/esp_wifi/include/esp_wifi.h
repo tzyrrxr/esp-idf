@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -54,7 +54,7 @@
 #include "esp_err.h"
 #include "esp_wifi_types.h"
 #include "esp_event.h"
-#include "esp_private/esp_wifi_private.h"
+#include "esp_wifi_crypto_types.h"
 #include "esp_wifi_default.h"
 
 #ifdef __cplusplus
@@ -89,6 +89,8 @@ extern "C" {
 #define ESP_ERR_WIFI_TWT_SETUP_REJECT  (ESP_ERR_WIFI_BASE + 26)  /*!< The twt setup request was rejected by the AP */
 #define ESP_ERR_WIFI_DISCARD           (ESP_ERR_WIFI_BASE + 27)  /*!< Discard frame */
 #define ESP_ERR_WIFI_ROC_IN_PROGRESS   (ESP_ERR_WIFI_BASE + 28)  /*!< ROC op is in progress */
+
+typedef struct wifi_osi_funcs_t wifi_osi_funcs_t;
 
 /**
  * @brief WiFi stack configuration parameters passed to esp_wifi_init call.
@@ -181,6 +183,7 @@ typedef struct {
 #endif
 
 extern const wpa_crypto_funcs_t g_wifi_default_wpa_crypto_funcs;
+extern wifi_osi_funcs_t g_wifi_osi_funcs;
 
 #define WIFI_INIT_CONFIG_MAGIC    0x1F2F3F4F
 
@@ -398,6 +401,7 @@ esp_err_t esp_wifi_restore(void);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
+  *    - ESP_ERR_WIFI_MODE: WiFi mode error
   *    - ESP_ERR_WIFI_CONN: WiFi internal error, station or soft-AP control block wrong
   *    - ESP_ERR_WIFI_SSID: SSID of AP which station connects is invalid
   */
@@ -897,6 +901,12 @@ esp_err_t esp_wifi_set_config(wifi_interface_t interface, wifi_config_t *conf);
   *    - ESP_ERR_WIFI_IF: invalid interface
   */
 esp_err_t esp_wifi_get_config(wifi_interface_t interface, wifi_config_t *conf);
+
+/**
+ * @brief Forward declare wifi_sta_list_t. The definition depends on the target device
+ * that implements esp_wifi
+ */
+typedef struct wifi_sta_list_t wifi_sta_list_t;
 
 /**
   * @brief     Get STAs associated with soft-AP
@@ -1458,9 +1468,10 @@ esp_err_t esp_wifi_sta_get_negotiated_phymode(wifi_phy_mode_t *phymode);
 esp_err_t esp_wifi_set_dynamic_cs(bool enabled);
 
 /**
-  * @brief      Get the rssi info after station connected to AP
+  * @brief      Get the rssi information of AP to which the device is associated with
   *
-  * @attention  This API should be called after station connected to AP.
+  * @attention 1. This API should be called after station connected to AP.
+  * @attention 2. Use this API only in WIFI_MODE_STA or WIFI_MODE_APSTA mode.
   *
   * @param      rssi store the rssi info received from last beacon.
   *

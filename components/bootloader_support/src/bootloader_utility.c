@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2018-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2018-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -15,40 +15,7 @@
 #include "esp_rom_uart.h"
 #include "sdkconfig.h"
 #if CONFIG_IDF_TARGET_ESP32
-#include "soc/dport_reg.h"
 #include "esp32/rom/cache.h"
-#include "esp32/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32S2
-#include "esp32s2/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32S3
-#include "esp32s3/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32C3
-#include "esp32c3/rom/efuse.h"
-#include "esp32c3/rom/crc.h"
-#include "esp32c3/rom/uart.h"
-#include "esp32c3/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32C2
-#include "esp32c2/rom/efuse.h"
-#include "esp32c2/rom/crc.h"
-#include "esp32c2/rom/rtc.h"
-#include "esp32c2/rom/uart.h"
-#include "esp32c2/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32C6
-#include "esp32c6/rom/efuse.h"
-#include "esp32c6/rom/crc.h"
-#include "esp32c6/rom/rtc.h"
-#include "esp32c6/rom/uart.h"
-#include "esp32c6/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32H2
-#include "esp32h2/rom/efuse.h"
-#include "esp32h2/rom/crc.h"
-#include "esp32h2/rom/rtc.h"
-#include "esp32h2/rom/uart.h"
-#include "esp32h2/rom/secure_boot.h"
-#elif CONFIG_IDF_TARGET_ESP32P4
-
-#else // CONFIG_IDF_TARGET_*
-#error "Unsupported IDF_TARGET"
 #endif
 #include "esp_rom_spiflash.h"
 
@@ -449,8 +416,7 @@ static bool try_load_partition(const esp_partition_pos_t *partition, esp_image_m
     }
 #ifdef BOOTLOADER_BUILD
     if (bootloader_load_image(partition, data) == ESP_OK) {
-        ESP_LOGI(TAG, "Loaded app from partition at offset 0x%x",
-                 partition->offset);
+        ESP_LOGI(TAG, "Loaded app from partition at offset 0x%" PRIx32, partition->offset);
         return true;
     }
 #endif
@@ -714,7 +680,7 @@ static void load_image(const esp_image_metadata_t *image_data)
            so issue a system reset to ensure flash encryption
            cache resets properly */
         ESP_LOGI(TAG, "Resetting with flash encryption enabled...");
-        esp_rom_uart_tx_wait_idle(0);
+        esp_rom_output_tx_wait_idle(0);
         bootloader_reset();
     }
 #endif
@@ -844,7 +810,7 @@ static void set_cache_and_start_app(
     //-----------------------MAP DROM--------------------------
     uint32_t drom_load_addr_aligned = drom_load_addr & MMU_FLASH_MASK;
     uint32_t drom_addr_aligned = drom_addr & MMU_FLASH_MASK;
-    ESP_EARLY_LOGV(TAG, "rodata starts from paddr=0x%08x, vaddr=0x%08x, size=0x%x", drom_addr, drom_load_addr, drom_size);
+    ESP_EARLY_LOGV(TAG, "rodata starts from paddr=0x%08" PRIx32 ", vaddr=0x%08" PRIx32 ", size=0x%" PRIx32, drom_addr, drom_load_addr, drom_size);
     //The addr is aligned, so we add the mask off length to the size, to make sure the corresponding buses are enabled.
     drom_size = (drom_load_addr - drom_load_addr_aligned) + drom_size;
 #if CONFIG_IDF_TARGET_ESP32
@@ -853,17 +819,17 @@ static void set_cache_and_start_app(
     ESP_EARLY_LOGV(TAG, "rc=%d", rc);
     rc = cache_flash_mmu_set(1, 0, drom_load_addr_aligned, drom_addr_aligned, 64, drom_page_count);
     ESP_EARLY_LOGV(TAG, "rc=%d", rc);
-    ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08x and vaddr=0x%08x, 0x%x bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, drom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
+    ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, drom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
 #else
     uint32_t actual_mapped_len = 0;
     mmu_hal_map_region(0, MMU_TARGET_FLASH0, drom_load_addr_aligned, drom_addr_aligned, drom_size, &actual_mapped_len);
-    ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08x and vaddr=0x%08x, 0x%x bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, actual_mapped_len);
+    ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, actual_mapped_len);
 #endif
 
     //-----------------------MAP IROM--------------------------
     uint32_t irom_load_addr_aligned = irom_load_addr & MMU_FLASH_MASK;
     uint32_t irom_addr_aligned = irom_addr & MMU_FLASH_MASK;
-    ESP_EARLY_LOGV(TAG, "text starts from paddr=0x%08x, vaddr=0x%08x, size=0x%x", irom_addr, irom_load_addr, irom_size);
+    ESP_EARLY_LOGV(TAG, "text starts from paddr=0x%08" PRIx32 ", vaddr=0x%08" PRIx32 ", size=0x%" PRIx32, irom_addr, irom_load_addr, irom_size);
     //The addr is aligned, so we add the mask off length to the size, to make sure the corresponding buses are enabled.
     irom_size = (irom_load_addr - irom_load_addr_aligned) + irom_size;
 #if CONFIG_IDF_TARGET_ESP32
@@ -872,10 +838,10 @@ static void set_cache_and_start_app(
     ESP_EARLY_LOGV(TAG, "rc=%d", rc);
     rc = cache_flash_mmu_set(1, 0, irom_load_addr_aligned, irom_addr_aligned, 64, irom_page_count);
     ESP_LOGV(TAG, "rc=%d", rc);
-    ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08x and vaddr=0x%08x, 0x%x bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, irom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
+    ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, irom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
 #else
     mmu_hal_map_region(0, MMU_TARGET_FLASH0, irom_load_addr_aligned, irom_addr_aligned, irom_size, &actual_mapped_len);
-    ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08x and vaddr=0x%08x, 0x%x bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, actual_mapped_len);
+    ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, actual_mapped_len);
 #endif
 
     //----------------------Enable corresponding buses----------------

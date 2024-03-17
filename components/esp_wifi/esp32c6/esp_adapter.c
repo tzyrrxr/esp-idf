@@ -1,9 +1,10 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "sdkconfig.h"
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -111,9 +112,9 @@ static void wifi_delete_queue_wrapper(void *queue)
 
 static void set_intr_wrapper(int32_t cpu_no, uint32_t intr_source, uint32_t intr_num, int32_t intr_prio)
 {
-    intr_matrix_route(intr_source, intr_num);
-    esprv_intc_int_set_priority(intr_num, intr_prio);
-    esprv_intc_int_set_type(intr_num, INTR_TYPE_LEVEL);
+    esp_rom_route_intr_matrix(cpu_no, intr_source, intr_num);
+    esprv_int_set_priority(intr_num, intr_prio);
+    esprv_int_set_type(intr_num, INTR_TYPE_LEVEL);
 }
 
 static void clear_intr_wrapper(uint32_t intr_source, uint32_t intr_num)
@@ -128,12 +129,12 @@ static void set_isr_wrapper(int32_t n, void *f, void *arg)
 
 static void enable_intr_wrapper(uint32_t intr_mask)
 {
-    esprv_intc_int_enable(intr_mask);
+    esprv_int_enable(intr_mask);
 }
 
 static void disable_intr_wrapper(uint32_t intr_mask)
 {
-    esprv_intc_int_disable(intr_mask);
+    esprv_int_disable(intr_mask);
 }
 
 static bool IRAM_ATTR is_from_isr_wrapper(void)
@@ -250,7 +251,7 @@ static uint32_t event_group_wait_bits_wrapper(void *event, uint32_t bits_to_wait
 
 static int32_t task_create_pinned_to_core_wrapper(void *task_func, const char *name, uint32_t stack_depth, void *param, uint32_t prio, void *task_handle, uint32_t core_id)
 {
-    return (uint32_t)xTaskCreatePinnedToCore(task_func, name, stack_depth, param, prio, task_handle, (core_id < portNUM_PROCESSORS ? core_id : tskNO_AFFINITY));
+    return (uint32_t)xTaskCreatePinnedToCore(task_func, name, stack_depth, param, prio, task_handle, (core_id < CONFIG_FREERTOS_NUMBER_OF_CORES ? core_id : tskNO_AFFINITY));
 }
 
 static int32_t task_create_wrapper(void *task_func, const char *name, uint32_t stack_depth, void *param, uint32_t prio, void *task_handle)

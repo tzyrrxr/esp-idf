@@ -100,6 +100,8 @@
 #define SOC_WDT_SUPPORTED           1
 #define SOC_SPI_FLASH_SUPPORTED     1
 #define SOC_RNG_SUPPORTED           1
+#define SOC_LIGHT_SLEEP_SUPPORTED   1
+#define SOC_DEEP_SLEEP_SUPPORTED    1
 
 #if SOC_CAPS_ECO_VER < 200
 #define SOC_DPORT_WORKAROUND                   1
@@ -441,3 +443,6 @@
 
 /*------------------------------------- PHY CAPS -------------------------------------*/
 #define SOC_PHY_COMBO_MODULE                  (1) /*!< Support Wi-Fi, BT and BLE*/
+
+/*--------------------------- EMAC --------------------------------*/
+#define SOC_EMAC_RMII_CLK_OUT_INTERNAL_LOOPBACK     (1) /*!< REF RMII CLK output is looped back internally */

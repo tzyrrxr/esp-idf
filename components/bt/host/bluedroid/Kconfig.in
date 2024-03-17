@@ -29,7 +29,7 @@ config BT_BLUEDROID_PINNED_TO_CORE
 config BT_BTU_TASK_STACK_SIZE
     int "Bluetooth Bluedroid Host Stack task stack size"
     depends on BT_BLUEDROID_ENABLED
-    default 4096
+    default 4352
     help
         This select btu task stack size
 
@@ -273,7 +273,7 @@ config BT_GATTC_CACHE_NVS_FLASH
 config BT_GATTC_CONNECT_RETRY_COUNT
     int "The number of attempts to reconnect if the connection establishment failed"
     depends on BT_GATTC_ENABLE
-    range 0 7
+    range 0 255
     default 3
     help
         The number of attempts to reconnect if the connection establishment failed
@@ -1087,6 +1087,14 @@ config BT_SMP_ENABLE
     depends on BT_BLUEDROID_ENABLED
     default BT_CLASSIC_ENABLED || BT_BLE_SMP_ENABLE
 
+config BT_SMP_MAX_BONDS
+    int "BT/BLE maximum bond device count"
+    depends on BT_SMP_ENABLE
+    range 1 32
+    default 15
+    help
+        The number of security records for peer devices.
+
 config BT_BLE_ACT_SCAN_REP_ADV_SCAN
     bool "Report adv data and scan response individually when BLE active scan"
     depends on BT_BLUEDROID_ENABLED && BT_BLE_ENABLED
@@ -1119,7 +1127,7 @@ config BT_MAX_DEVICE_NAME_LEN
 
 config BT_BLE_RPA_SUPPORTED
     bool "Update RPA to Controller"
-    depends on (BT_BLUEDROID_ENABLED && ((BT_CONTROLLER_ENABLED && !SOC_BLE_DEVICE_PRIVACY_SUPPORTED) || BT_CONTROLLER_DISABLED))
+    depends on (BT_BLUEDROID_ENABLED && ((BT_CONTROLLER_ENABLED && !SOC_BLE_DEVICE_PRIVACY_SUPPORTED) || BT_CONTROLLER_DISABLED)) # NOERROR
     default n if (BT_CONTROLLER_ENABLED && !SOC_BLE_DEVICE_PRIVACY_SUPPORTED)
     default y if BT_CONTROLLER_DISABLED
     help
@@ -1148,7 +1156,8 @@ config BT_BLE_50_FEATURES_SUPPORTED
     depends on (BT_BLE_ENABLED && ((BT_CONTROLLER_ENABLED && SOC_BLE_50_SUPPORTED) || BT_CONTROLLER_DISABLED))
     default y
     help
-        Enabling this option activates BLE 5.0 features. This option is universally supported in chips that support BLE, except for ESP32.
+        Enabling this option activates BLE 5.0 features.
+        This option is universally supported in chips that support BLE, except for ESP32.
 
 config BT_BLE_42_FEATURES_SUPPORTED
     bool "Enable BLE 4.2 features"
@@ -1159,21 +1168,21 @@ config BT_BLE_42_FEATURES_SUPPORTED
 
 config BT_BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER
     bool "Enable BLE periodic advertising sync transfer feature"
-    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED))
+    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED)) # NOERROR
     default n
     help
         This enables BLE periodic advertising sync transfer feature
 
 config BT_BLE_FEAT_PERIODIC_ADV_ENH
     bool "Enable periodic adv enhancements(adi support)"
-    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED))
+    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED)) # NOERROR
     default n
     help
         Enable the periodic advertising enhancements
 
 config BT_BLE_FEAT_CREATE_SYNC_ENH
     bool "Enable create sync enhancements(reporting disable and duplicate filtering enable support)"
-    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED))
+    depends on (BT_BLUEDROID_ENABLED && BT_BLE_50_FEATURES_SUPPORTED && ((BT_CONTROLLER_ENABLED && SOC_ESP_NIMBLE_CONTROLLER) || BT_CONTROLLER_DISABLED)) # NOERROR
     default n
     help
         Enable the create sync enhancements

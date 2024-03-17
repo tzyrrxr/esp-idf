@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2021-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2021-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -105,7 +105,7 @@ TEST_CASE("GPIO_config_parameters_test", "[gpio]")
 static void gpio_isr_edge_handler(void *arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
-    esp_rom_printf("GPIO[%d] intr on core %d, val: %d\n", gpio_num, esp_cpu_get_core_id(), gpio_get_level(gpio_num));
+    esp_rom_printf("GPIO[%" PRIu32 "] intr on core %d, val: %d\n", gpio_num, esp_cpu_get_core_id(), gpio_get_level(gpio_num));
     edge_intr_times++;
 }
 
@@ -114,7 +114,7 @@ static void gpio_isr_level_handler(void *arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     disable_intr_times++;
-    esp_rom_printf("GPIO[%d] intr, val: %d, disable_intr_times = %d\n", gpio_num, gpio_get_level(gpio_num), disable_intr_times);
+    esp_rom_printf("GPIO[%" PRIu32 "] intr, val: %d, disable_intr_times = %d\n", gpio_num, gpio_get_level(gpio_num), disable_intr_times);
     gpio_intr_disable(gpio_num);
 }
 
@@ -123,7 +123,7 @@ static void gpio_isr_level_handler2(void *arg)
 {
     uint32_t gpio_num = (uint32_t) arg;
     level_intr_times++;
-    esp_rom_printf("GPIO[%d] intr, val: %d, level_intr_times = %d\n", gpio_num, gpio_get_level(gpio_num), level_intr_times);
+    esp_rom_printf("GPIO[%" PRIu32 "] intr, val: %d, level_intr_times = %d\n", gpio_num, gpio_get_level(gpio_num), level_intr_times);
     if (gpio_get_level(gpio_num)) {
         gpio_set_level(gpio_num, 0);
     } else {
@@ -383,7 +383,7 @@ TEST_CASE("GPIO_interrupt_on_other_CPUs_test", "[gpio]")
     TaskHandle_t gpio_task_handle;
     test_gpio_config_mode_input_output(TEST_GPIO_INPUT_OUTPUT_IO1);
 
-    for (int cpu_num = 1; cpu_num < portNUM_PROCESSORS; ++cpu_num) {
+    for (int cpu_num = 1; cpu_num < CONFIG_FREERTOS_NUMBER_OF_CORES; ++cpu_num) {
         // We assume unit-test task is running on core 0, so we install gpio interrupt on other cores
         edge_intr_times = 0;
         TEST_ESP_OK(gpio_set_level(TEST_GPIO_INPUT_OUTPUT_IO1, 0));
@@ -506,7 +506,7 @@ static void gpio_interconnect_input_output_pin(uint32_t input_pin, uint32_t outp
 {
     // signal256 -> output pin -> signal_idx -> input_pin
     // Set output pin IE to be able to connect to the signal
-    PIN_INPUT_ENABLE(GPIO_PIN_MUX_REG[output_pin]);
+    gpio_ll_input_enable(&GPIO, output_pin);
     esp_rom_gpio_connect_in_signal(output_pin, signal_idx, 0);
     // Input pin OE to be able to connect to the signal is done by the esp_rom_gpio_connect_out_signal function
     esp_rom_gpio_connect_out_signal(input_pin, signal_idx, 0, 0);
@@ -668,10 +668,10 @@ static void prompt_to_continue(const char *str)
     char sign[5] = {0};
     while (strlen(sign) == 0) {
         /* Flush anything already in the RX buffer */
-        while (esp_rom_uart_rx_one_char((uint8_t *) sign) == 0) {
+        while (esp_rom_output_rx_one_char((uint8_t *) sign) == 0) {
         }
         /* Read line */
-        esp_rom_uart_rx_string((uint8_t *) sign, sizeof(sign) - 1);
+        esp_rom_output_rx_string((uint8_t *) sign, sizeof(sign) - 1);
     }
 }
 
@@ -860,7 +860,8 @@ TEST_CASE("GPIO_USB_DP_pin_pullup_disable_test", "[gpio]")
 }
 #endif //SOC_USB_SERIAL_JTAG_SUPPORTED
 
-#if !TEMPORARY_DISABLED_FOR_TARGETS(ESP32P4) // TODO: IDF-7528 Remove when light sleep is supported on ESP32P4
+#if !TEMPORARY_DISABLED_FOR_TARGETS(ESP32C5)
+// TODO: IDF-8638 Remove when light sleep is supported on ESP32C5
 // Ignored in CI because it needs manually connect TEST_GPIO_INPUT_LEVEL_LOW_PIN to 3.3v to wake up from light sleep
 TEST_CASE("GPIO_light_sleep_wake_up_test", "[gpio][ignore]")
 {
@@ -877,4 +878,4 @@ TEST_CASE("GPIO_light_sleep_wake_up_test", "[gpio][ignore]")
     printf("Waked up from light sleep\n");
     TEST_ASSERT(esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO);
 }
-#endif //!TEMPORARY_DISABLED_FOR_TARGETS(...)
+#endif

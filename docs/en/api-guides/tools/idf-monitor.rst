@@ -167,7 +167,7 @@ Whenever the chip outputs a hexadecimal address that points to executable code, 
 
     Backtrace:
     panic_abort (details=details@entry=0x3fc9a37c "abort() was called at PC 0x42067cd5 on core 0") at /home/marius/esp-idf_2/components/esp_system/panic.c:367
-    367	    *((int *) 0) = 0; // NOLINT(clang-analyzer-core.NullDereference) should be an invalid operation on targets
+    367     *((int *) 0) = 0; // NOLINT(clang-analyzer-core.NullDereference) should be an invalid operation on targets
     #0  panic_abort (details=details@entry=0x3fc9a37c "abort() was called at PC 0x42067cd5 on core 0") at /home/marius/esp-idf_2/components/esp_system/panic.c:367
     #1  0x40386b02 in esp_system_abort (details=details@entry=0x3fc9a37c "abort() was called at PC 0x42067cd5 on core 0") at /home/marius/esp-idf_2/components/esp_system/system_api.c:108
     #2  0x403906cc in abort () at /home/marius/esp-idf_2/components/newlib/abort.c:46
@@ -228,7 +228,7 @@ The ROM ELF file is automatically loaded from a location based on the ``IDF_PATH
 Target Reset on Connection
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-By default, IDF Monitor will reset the target when connecting to it. The reset of the target chip is performed using the DTR and RTS serial lines. To prevent IDF Monitor from automatically resetting the target on connection, call IDF Monitor with the ``--no-reset`` option (e.g., ``idf.py monitor --no-reset``).
+By default, IDF Monitor will reset the target when connecting to it. The reset of the target chip is performed using the DTR and RTS serial lines. To prevent IDF Monitor from automatically resetting the target on connection, call IDF Monitor with the ``--no-reset`` option (e.g., ``idf.py monitor --no-reset``). You can also set the environment variable ``ESP_IDF_MONITOR_NO_RESET`` to ``1`` to achieve the same behavior.
 
 .. note::
 

@@ -37,8 +37,7 @@ else()
             "system_time.c"
             "stack_check.c"
             "ubsan.c"
-            "xt_wdt.c"
-            "debug_stubs.c")
+            "xt_wdt.c")
 
     if(CONFIG_ESP_TASK_WDT_EN)
         list(APPEND srcs "task_wdt/task_wdt.c")
@@ -68,9 +67,7 @@ else()
                                     # [refactor-todo] requirements due to init code,
                                     # should be removable once using component init functions
                                     # link-time registration is used.
-                                    # [refactor-todo] esp_partition required for virtual efuse
-                                    # init code. Move to esp_efuse component.
-                                    pthread bootloader_support efuse esp_partition esp_pm
+                                    bootloader_support esp_pm
                         LDFRAGMENTS "linker.lf" "app.lf")
     add_subdirectory(port)
 
@@ -86,7 +83,7 @@ else()
 
     # Disable stack protection in files which are involved in initialization of that feature
     set_source_files_properties(
-        "startup.c" "stack_check.c"
+        "startup.c" "stack_check.c" "port/cpu_start.c"
         PROPERTIES COMPILE_FLAGS
         -fno-stack-protector)
 
@@ -143,4 +140,8 @@ if(NOT BOOTLOADER_BUILD)
     if(CONFIG_SPIRAM)
         idf_component_optional_requires(PRIVATE esp_psram)
     endif()
+endif()
+
+if(CONFIG_SOC_MEM_NON_CONTIGUOUS_SRAM)
+    target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--enable-non-contiguous-regions")
 endif()

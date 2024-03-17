@@ -94,7 +94,8 @@
         "esp32c6",
         "esp32c5",
         "esp32h2",
-        "esp32p4"
+        "esp32p4",
+        "esp32c61"
       ],
       "version_cmd": [
         "riscv32-esp-elf-gdb-no-python",
@@ -249,7 +250,8 @@
         "esp32c2",
         "esp32c6",
         "esp32c5",
-        "esp32h2"
+        "esp32h2",
+        "esp32c61"
       ],
       "version_cmd": [
         "clang",
@@ -314,7 +316,9 @@
         "esp32c2",
         "esp32c6",
         "esp32c5",
-        "esp32h2"
+        "esp32h2",
+        "esp32c61",
+        "esp32p4"
       ],
       "version_cmd": [
         "riscv32-esp-elf-gcc",
@@ -859,11 +863,11 @@
       "versions": [
         {
           "any": {
-            "sha256": "24bcc8cb3287175d4a0bfd65e04bf7ef592a10f022acffca0d5e87eee05996d4",
-            "size": 2832570,
-            "url": "https://github.com/espressif/esp-rom-elfs/releases/download/20230320/esp-rom-elfs-20230320.tar.gz"
+            "sha256": "a26609b415710f0163d785850c769752717004059c129c472e9a0cbd54e0422c",
+            "size": 3258247,
+            "url": "https://github.com/espressif/esp-rom-elfs/releases/download/20240305/esp-rom-elfs-20240305.tar.gz"
           },
-          "name": "20230320",
+          "name": "20240305",
           "status": "recommended"
         }
       ]

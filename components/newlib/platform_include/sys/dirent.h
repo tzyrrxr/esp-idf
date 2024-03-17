@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -42,7 +42,7 @@ struct dirent {
 #define DT_DIR      2
 #if __BSD_VISIBLE
 #define MAXNAMLEN 255
-    char d_name[MAXNAMLEN+1];   /*!< zero-terminated file name */
+    char d_name[MAXNAMLEN + 1]; /*!< zero-terminated file name */
 #else
     char d_name[256];
 #endif
@@ -55,6 +55,10 @@ void seekdir(DIR* pdir, long loc);
 void rewinddir(DIR* pdir);
 int closedir(DIR* pdir);
 int readdir_r(DIR* pdir, struct dirent* entry, struct dirent** out_dirent);
+int scandir(const char *dirname, struct dirent ***out_dirlist,
+            int (*select_func)(const struct dirent *),
+            int (*cmp_func)(const struct dirent **, const struct dirent **));
+int alphasort(const struct dirent **d1, const struct dirent **d2);
 
 #ifdef __cplusplus
 }

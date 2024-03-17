@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Unlicense OR CC0-1.0
  */
@@ -64,10 +64,18 @@ void test_task_wdt_cpu0(void)
 }
 
 __attribute__((optimize("-O0")))
+static void test_hw_stack_guard_cpu(void* arg)
+{
+    uint32_t buf[256];
+    test_hw_stack_guard_cpu(arg);
+}
+
 void test_hw_stack_guard_cpu0(void)
 {
-    uint32_t buf[128];
-    test_hw_stack_guard_cpu0();
+    xTaskCreatePinnedToCore(test_hw_stack_guard_cpu, "HWSG0", 512, NULL, 1, NULL, 0);
+    while (true) {
+        vTaskDelay(100);
+    }
 }
 
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY
@@ -114,16 +122,6 @@ void test_task_wdt_cpu1(void)
     }
 }
 
-void test_task_wdt_both_cpus(void)
-{
-    xTaskCreatePinnedToCore(infinite_loop, "Infinite loop", 1024, NULL, 4, NULL, 1);
-    /* Give some time to the task on CPU 1 to be scheduled */
-    vTaskDelay(1);
-    xTaskCreatePinnedToCore(infinite_loop, "Infinite loop", 1024, NULL, 4, NULL, 0);
-    while (true) {
-        ;
-    }
-}
 #endif
 
 void __attribute__((no_sanitize_undefined)) test_storeprohibited(void)

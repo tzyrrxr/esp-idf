@@ -35,7 +35,7 @@ void IRAM_ATTR esp_system_reset_modules_on_exit(void)
     // Flush any data left in UART FIFOs before reset the UART peripheral
     for (int i = 0; i < SOC_UART_HP_NUM; ++i) {
         if (uart_ll_is_enabled(i)) {
-            esp_rom_uart_tx_wait_idle(i);
+            esp_rom_output_tx_wait_idle(i);
         }
     }
 
@@ -79,7 +79,6 @@ void IRAM_ATTR esp_restart_noos(void)
     //Enable flash boot mode so that flash booting after restart is protected by the RTC WDT.
     wdt_hal_set_flashboot_en(&rtc_wdt_ctx, true);
     wdt_hal_write_protect_enable(&rtc_wdt_ctx);
-
 
     // Disable TG0/TG1 watchdogs
     wdt_hal_context_t wdt0_context = {.inst = WDT_MWDT0, .mwdt_dev = &TIMERG0};

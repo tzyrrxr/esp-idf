@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -47,7 +47,7 @@
 #define SOC_LEDC_SUPPORTED              1
 #define SOC_I2C_SUPPORTED               1
 #define SOC_SYSTIMER_SUPPORTED          1
-// #define SOC_SUPPORT_COEXISTENCE         1 // TODO: IDF-6416
+#define SOC_SUPPORT_COEXISTENCE         1
 #define SOC_AES_SUPPORTED               1
 #define SOC_MPI_SUPPORTED               1
 #define SOC_SHA_SUPPORTED               1
@@ -69,6 +69,9 @@
 #define SOC_WDT_SUPPORTED               1
 #define SOC_SPI_FLASH_SUPPORTED         1
 #define SOC_RNG_SUPPORTED               1
+#define SOC_LIGHT_SLEEP_SUPPORTED       1
+#define SOC_DEEP_SLEEP_SUPPORTED        1
+#define SOC_MODEM_CLOCK_SUPPORTED       1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
 #define SOC_XTAL_SUPPORT_32M            1
@@ -164,10 +167,11 @@
 #define SOC_DS_KEY_CHECK_MAX_WAIT_US (1100)
 
 /*-------------------------- GDMA CAPS -------------------------------------*/
-#define SOC_AHB_GDMA_VERSION            1U
-#define SOC_GDMA_NUM_GROUPS_MAX         1U
-#define SOC_GDMA_PAIRS_PER_GROUP_MAX    3
-#define SOC_GDMA_SUPPORT_ETM            1  // Support ETM submodule
+#define SOC_AHB_GDMA_VERSION                1U
+#define SOC_GDMA_NUM_GROUPS_MAX             1U
+#define SOC_GDMA_PAIRS_PER_GROUP_MAX        3
+#define SOC_GDMA_SUPPORT_ETM                1  // Support ETM submodule
+#define SOC_GDMA_SUPPORT_SLEEP_RETENTION    1
 
 /*-------------------------- ETM CAPS --------------------------------------*/
 #define SOC_ETM_GROUPS                  1U  // Number of ETM groups
@@ -210,12 +214,14 @@
 
 // The Clock Out singnal is route to the pin by GPIO matrix
 #define SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX    (1)
+#define SOC_CLOCKOUT_HAS_SOURCE_GATE         (1)
 
 /*-------------------------- RTCIO CAPS --------------------------------------*/
 /* No dedicated LP_IOMUX subsystem on ESP32-H2. LP functions are still supported
  * for hold, wake & 32kHz crystal functions - via LP_AON registers */
 #define SOC_RTCIO_PIN_COUNT         (8U)
 #define SOC_RTCIO_HOLD_SUPPORTED    (1)
+#define SOC_RTCIO_VALID_RTCIO_MASK  (0x7F80)
 
 /*-------------------------- Dedicated GPIO CAPS -----------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -234,7 +240,7 @@
 #define SOC_I2C_CMD_REG_NUM         (8)  /*!< Number of I2C command registers */
 #define SOC_I2C_SUPPORT_SLAVE       (1)
 
-// FSM_RST only resets the FSM, not using it. So SOC_I2C_SUPPORT_HW_FSM_RST not defined.
+#define SOC_I2C_SUPPORT_HW_FSM_RST  (1)
 #define SOC_I2C_SUPPORT_HW_CLR_BUS  (1)
 
 #define SOC_I2C_SUPPORT_XTAL        (1)
@@ -323,6 +329,8 @@
 #define SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH    8  /*!< Number of data lines of the TX unit */
 #define SOC_PARLIO_RX_UNIT_MAX_DATA_WIDTH    8  /*!< Number of data lines of the RX unit */
 #define SOC_PARLIO_TX_CLK_SUPPORT_GATING     1  /*!< Support gating TX clock */
+#define SOC_PARLIO_RX_CLK_SUPPORT_GATING     1  /*!< Support gating RX clock */
+#define SOC_PARLIO_RX_CLK_SUPPORT_OUTPUT     1  /*!< Support output RX clock to a GPIO */
 #define SOC_PARLIO_TRANS_BIT_ALIGN           1  /*!< Support bit alignment in transaction */
 
 /*--------------------------- MPI CAPS ---------------------------------------*/
@@ -494,7 +502,7 @@
 #define SOC_PM_CPU_RETENTION_BY_SW      (1)
 #define SOC_PM_MODEM_RETENTION_BY_REGDMA           (1)
 #define SOC_PM_SUPPORT_DEEPSLEEP_CHECK_STUB_ONLY   (1) /*!<Supports CRC only the stub code in RTC memory */
-#define SOC_PM_RETENTION_HAS_REGDMA_POWER_BUG      (1)
+#define SOC_PM_RETENTION_SW_TRIGGER_REGDMA      (1)    /*!< In esp32H2, regdma will power off when entering sleep */
 
 /*-------------------------- CLOCK SUBSYSTEM CAPS ----------------------------------------*/
 #define SOC_CLK_RC_FAST_SUPPORT_CALIBRATION       (1)
@@ -512,6 +520,10 @@
 #define SOC_TEMPERATURE_SENSOR_SUPPORT_FAST_RC                (1)
 #define SOC_TEMPERATURE_SENSOR_SUPPORT_XTAL                   (1)
 #define SOC_TEMPERATURE_SENSOR_INTR_SUPPORT                   (1)
+#define SOC_TEMPERATURE_SENSOR_SUPPORT_ETM                    (1)
+
+/*--------------------------------- RNG CAPS --------------------------------------------*/
+#define SOC_RNG_CLOCK_IS_INDEPENDENT                          (1)
 
 /*---------------------------------- Bluetooth CAPS ----------------------------------*/
 #define SOC_BLE_SUPPORTED               (1)    /*!< Support Bluetooth Low Energy hardware */
@@ -521,3 +533,4 @@
 #define SOC_BLE_DEVICE_PRIVACY_SUPPORTED (1)   /*!< Support BLE device privacy mode */
 #define SOC_BLE_POWER_CONTROL_SUPPORTED (1)    /*!< Support Bluetooth Power Control */
 #define SOC_BLE_MULTI_CONN_OPTIMIZATION (1)    /*!< Support multiple connections optimization */
+#define SOC_BLE_PERIODIC_ADV_ENH_SUPPORTED  (1)    /*!< Support For BLE Periodic Adv Enhancements */

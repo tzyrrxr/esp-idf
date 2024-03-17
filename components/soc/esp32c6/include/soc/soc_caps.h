@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -72,6 +72,9 @@
 #define SOC_WDT_SUPPORTED               1
 #define SOC_SPI_FLASH_SUPPORTED         1
 #define SOC_RNG_SUPPORTED               1
+#define SOC_LIGHT_SLEEP_SUPPORTED       1
+#define SOC_DEEP_SLEEP_SUPPORTED        1
+#define SOC_MODEM_CLOCK_SUPPORTED       1
 
 /*-------------------------- XTAL CAPS ---------------------------------------*/
 #define SOC_XTAL_SUPPORT_40M            1
@@ -162,10 +165,11 @@
 #define SOC_DS_KEY_CHECK_MAX_WAIT_US (1100)
 
 /*-------------------------- GDMA CAPS -------------------------------------*/
-#define SOC_AHB_GDMA_VERSION            1U
-#define SOC_GDMA_NUM_GROUPS_MAX         1U
-#define SOC_GDMA_PAIRS_PER_GROUP_MAX    3
-#define SOC_GDMA_SUPPORT_ETM            1  // Support ETM submodule
+#define SOC_AHB_GDMA_VERSION                1U
+#define SOC_GDMA_NUM_GROUPS_MAX             1U
+#define SOC_GDMA_PAIRS_PER_GROUP_MAX        3
+#define SOC_GDMA_SUPPORT_ETM                1  // Support ETM submodule
+#define SOC_GDMA_SUPPORT_SLEEP_RETENTION    1
 
 /*-------------------------- ETM CAPS --------------------------------------*/
 #define SOC_ETM_GROUPS                  1U  // Number of ETM groups
@@ -188,6 +192,8 @@
 #define SOC_GPIO_SUPPORT_RTC_INDEPENDENT    (1)
 // GPIO0~7 on ESP32C6 can support chip deep sleep wakeup
 #define SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP   (1)
+// LP IO peripherals have independent clock gating to manage
+#define SOC_LP_IO_CLOCK_IS_INDEPENDENT      (1)
 
 #define SOC_GPIO_VALID_GPIO_MASK        ((1U<<SOC_GPIO_PIN_COUNT) - 1)
 #define SOC_GPIO_VALID_OUTPUT_GPIO_MASK SOC_GPIO_VALID_GPIO_MASK
@@ -207,6 +213,7 @@
 
 // The Clock Out singnal is route to the pin by GPIO matrix
 #define SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX    (1)
+#define SOC_CLOCKOUT_HAS_SOURCE_GATE         (1)
 
 /*-------------------------- RTCIO CAPS --------------------------------------*/
 #define SOC_RTCIO_PIN_COUNT                 8
@@ -216,6 +223,7 @@
                                              */
 #define SOC_RTCIO_HOLD_SUPPORTED            1
 #define SOC_RTCIO_WAKE_SUPPORTED            1
+#define SOC_RTCIO_VALID_RTCIO_MASK         (0xFF)
 
 /*-------------------------- Dedicated GPIO CAPS -----------------------------*/
 #define SOC_DEDIC_GPIO_OUT_CHANNELS_NUM (8) /*!< 8 outward channels on each CPU core */
@@ -230,7 +238,7 @@
 #define SOC_I2C_CMD_REG_NUM         (8)  /*!< Number of I2C command registers */
 #define SOC_I2C_SUPPORT_SLAVE       (1)
 
-// FSM_RST only resets the FSM, not using it. So SOC_I2C_SUPPORT_HW_FSM_RST not defined.
+#define SOC_I2C_SUPPORT_HW_FSM_RST  (1)
 #define SOC_I2C_SUPPORT_HW_CLR_BUS  (1)
 
 #define SOC_I2C_SUPPORT_XTAL        (1)
@@ -470,6 +478,7 @@
 #define SOC_UART_SUPPORT_RTC_CLK        (1)         /*!< Support RTC clock as the clock source */
 #define SOC_UART_SUPPORT_XTAL_CLK       (1)         /*!< Support XTAL clock as the clock source */
 #define SOC_UART_SUPPORT_WAKEUP_INT     (1)         /*!< Support UART wakeup interrupt */
+#define SOC_UART_HAS_LP_UART            (1)         /*!< Support LP UART */
 
 // UART has an extra TX_WAIT_SEND state when the FIFO is not empty and XOFF is enabled
 #define SOC_UART_SUPPORT_FSM_TX_WAIT_SEND   (1)
@@ -534,6 +543,10 @@
 #define SOC_TEMPERATURE_SENSOR_SUPPORT_FAST_RC                (1)
 #define SOC_TEMPERATURE_SENSOR_SUPPORT_XTAL                   (1)
 #define SOC_TEMPERATURE_SENSOR_INTR_SUPPORT                   (1)
+#define SOC_TEMPERATURE_SENSOR_SUPPORT_ETM                    (1)
+
+/*--------------------------------- RNG CAPS --------------------------------------------*/
+#define SOC_RNG_CLOCK_IS_INDEPENDENT                          (1)
 
 /*------------------------------------ WI-FI CAPS ------------------------------------*/
 #define SOC_WIFI_HW_TSF                     (1)    /*!< Support hardware TSF */
@@ -559,3 +572,6 @@
 
 /*------------------------------------- PHY CAPS -------------------------------------*/
 #define SOC_PHY_COMBO_MODULE                  (1) /*!< Support Wi-Fi, BLE and 15.4*/
+
+/*------------------------------------- No Reset CAPS -------------------------------------*/
+#define SOC_CAPS_NO_RESET_BY_ANA_BOD           (1)

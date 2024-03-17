@@ -8,7 +8,6 @@
 #include "esp_system.h"
 #include "esp_private/system_internal.h"
 #include "esp_attr.h"
-#include "esp_efuse.h"
 #include "esp_log.h"
 #include "esp_ipc_isr.h"
 #include "sdkconfig.h"
@@ -33,7 +32,7 @@ void IRAM_ATTR esp_system_reset_modules_on_exit(void)
     // Flush any data left in UART FIFOs before reset the UART peripheral
     for (int i = 0; i < SOC_UART_HP_NUM; ++i) {
         if (uart_ll_is_enabled(i)) {
-            esp_rom_uart_tx_wait_idle(i);
+            esp_rom_output_tx_wait_idle(i);
         }
     }
 

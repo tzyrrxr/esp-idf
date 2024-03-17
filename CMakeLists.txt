@@ -121,8 +121,10 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     list(APPEND compile_options "-Wno-c2x-extensions")
     # warning on xMPU_SETTINGS for esp32s2 has size 0 for C and 1 for C++
     list(APPEND compile_options "-Wno-extern-c-compat")
-    # warning: implicit truncation from 'int' to a one-bit wide bit-field changes value from 1 to -1
-    list(APPEND compile_options "-Wno-single-bit-bitfield-constant-conversion")
+    if(NOT (CONFIG_IDF_TARGET_LINUX AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin"))
+        # warning: implicit truncation from 'int' to a one-bit wide bit-field changes value from 1 to -1
+        list(APPEND compile_options "-Wno-single-bit-bitfield-constant-conversion")
+    endif()
 endif()
 # More warnings may exist in unit tests and example projects.
 
@@ -221,9 +223,9 @@ else()
 endif()
 
 # SMP FreeRTOS user provided minimal idle hook. This allows the user to provide
-# their own copy of vApplicationMinimalIdleHook()
-if(CONFIG_FREERTOS_USE_MINIMAL_IDLE_HOOK)
-    list(APPEND link_options "-Wl,--wrap=vApplicationMinimalIdleHook")
+# their own copy of vApplicationPassiveIdleHook()
+if(CONFIG_FREERTOS_USE_PASSIVE_IDLE_HOOK)
+    list(APPEND link_options "-Wl,--wrap=vApplicationPassiveIdleHook")
 endif()
 
 # Placing jump tables in flash would cause issues with code that required
@@ -243,15 +245,6 @@ if(COMPILER_RT_LIB_NAME)
     list(APPEND link_options "-rtlib=${CONFIG_COMPILER_RT_LIB_NAME}")
 endif()
 
-# For the transition period from 32-bit time_t to 64-bit time_t,
-# auto-detect the size of this type and set corresponding variable.
-include(CheckTypeSize)
-check_type_size("time_t" TIME_T_SIZE)
-if(TIME_T_SIZE)
-    idf_build_set_property(TIME_T_SIZE ${TIME_T_SIZE})
-else()
-    message(FATAL_ERROR "Failed to determine sizeof(time_t)")
-endif()
 
 idf_build_set_property(COMPILE_OPTIONS "${compile_options}" APPEND)
 idf_build_set_property(C_COMPILE_OPTIONS "${c_compile_options}" APPEND)

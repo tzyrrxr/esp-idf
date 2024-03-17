@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -66,7 +66,7 @@ static size_t IRAM_ATTR rmt_encode_bytes(rmt_encoder_t *encoder, rmt_channel_han
     // where to put the encoded symbols? DMA buffer or RMT HW memory
     rmt_symbol_word_t *mem_to_nc = NULL;
     if (channel->dma_chan) {
-        mem_to_nc = (rmt_symbol_word_t *)RMT_GET_NON_CACHE_ADDR(channel->dma_mem_base);
+        mem_to_nc = tx_chan->dma_mem_base_nc;
     } else {
         mem_to_nc = channel->hw_mem_base;
     }
@@ -176,7 +176,7 @@ static size_t IRAM_ATTR rmt_encode_copy(rmt_encoder_t *encoder, rmt_channel_hand
     // where to put the encoded symbols? DMA buffer or RMT HW memory
     rmt_symbol_word_t *mem_to_nc = NULL;
     if (channel->dma_chan) {
-        mem_to_nc = (rmt_symbol_word_t *)RMT_GET_NON_CACHE_ADDR(channel->dma_mem_base);
+        mem_to_nc = tx_chan->dma_mem_base_nc;
     } else {
         mem_to_nc = channel->hw_mem_base;
     }
@@ -260,7 +260,7 @@ esp_err_t rmt_new_bytes_encoder(const rmt_bytes_encoder_config_t *config, rmt_en
 {
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_FALSE(config && ret_encoder, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
-    rmt_bytes_encoder_t *encoder = heap_caps_calloc(1, sizeof(rmt_bytes_encoder_t), RMT_MEM_ALLOC_CAPS);
+    rmt_bytes_encoder_t *encoder = rmt_alloc_encoder_mem(sizeof(rmt_bytes_encoder_t));
     ESP_GOTO_ON_FALSE(encoder, ESP_ERR_NO_MEM, err, TAG, "no mem for bytes encoder");
     encoder->base.encode = rmt_encode_bytes;
     encoder->base.del = rmt_del_bytes_encoder;
@@ -275,11 +275,21 @@ err:
     return ret;
 }
 
+esp_err_t rmt_bytes_encoder_update_config(rmt_encoder_handle_t bytes_encoder, const rmt_bytes_encoder_config_t *config)
+{
+    ESP_RETURN_ON_FALSE(bytes_encoder && config, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+    rmt_bytes_encoder_t *encoder = __containerof(bytes_encoder, rmt_bytes_encoder_t, base);
+    encoder->bit0 = config->bit0;
+    encoder->bit1 = config->bit1;
+    encoder->flags.msb_first = config->flags.msb_first;
+    return ESP_OK;
+}
+
 esp_err_t rmt_new_copy_encoder(const rmt_copy_encoder_config_t *config,  rmt_encoder_handle_t *ret_encoder)
 {
     esp_err_t ret = ESP_OK;
     ESP_GOTO_ON_FALSE(config && ret_encoder, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
-    rmt_copy_encoder_t *encoder = heap_caps_calloc(1, sizeof(rmt_copy_encoder_t), RMT_MEM_ALLOC_CAPS);
+    rmt_copy_encoder_t *encoder = rmt_alloc_encoder_mem(sizeof(rmt_copy_encoder_t));
     ESP_GOTO_ON_FALSE(encoder, ESP_ERR_NO_MEM, err, TAG, "no mem for copy encoder");
     encoder->base.encode = rmt_encode_copy;
     encoder->base.del = rmt_del_copy_encoder;
@@ -301,4 +311,9 @@ esp_err_t rmt_encoder_reset(rmt_encoder_handle_t encoder)
 {
     ESP_RETURN_ON_FALSE(encoder, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     return encoder->reset(encoder);
+}
+
+void* rmt_alloc_encoder_mem(size_t size)
+{
+    return heap_caps_calloc(1, size, RMT_MEM_ALLOC_CAPS);
 }

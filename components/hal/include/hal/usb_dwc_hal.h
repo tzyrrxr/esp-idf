@@ -1,29 +1,27 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
 #pragma once
 
+#include "soc/soc_caps.h"
+/*
+This header is shared across all targets. Resolve to an empty header for targets
+that don't support USB OTG.
+*/
+#if SOC_USB_OTG_SUPPORTED
+#include <stdint.h>
+#include <stdbool.h>
+#include "hal/usb_dwc_ll.h"
+#include "hal/usb_dwc_types.h"
+#include "hal/assert.h"
+#endif // SOC_USB_OTG_SUPPORTED
+
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/*
-NOTE: Thread safety is the responsibility fo the HAL user. All USB Host HAL
-      functions must be called from critical sections unless specified otherwise
-*/
-
-#include <stdlib.h>
-#include <stddef.h>
-#include "soc/soc_caps.h"
-#if SOC_USB_OTG_SUPPORTED
-#include "soc/usb_dwc_struct.h"
-#include "hal/usb_dwc_ll.h"
-#endif
-#include "hal/usb_dwc_types.h"
-#include "hal/assert.h"
 
 #if SOC_USB_OTG_SUPPORTED
 
@@ -142,8 +140,9 @@ typedef struct {
         uint32_t val;
     };
     struct {
-        usb_hal_interval_t interval;        /**< The interval of the endpoint */
-        uint32_t phase_offset_frames;       /**< Phase offset in number of frames */
+        unsigned int interval;              /**< The interval of the endpoint in frames (FS) or microframes (HS) */
+        uint32_t offset;                    /**< Offset of this channel in the periodic scheduler */
+        bool is_hs;                         /**< This endpoint is HighSpeed. Needed for Periodic Frame List (HAL layer) scheduling */
     } periodic;     /**< Characteristic for periodic (interrupt/isochronous) endpoints only */
 } usb_dwc_hal_ep_char_t;
 
@@ -178,7 +177,7 @@ typedef struct {
     uint32_t *periodic_frame_list;                 /**< Pointer to scheduling frame list */
     usb_hal_frame_list_len_t frame_list_len;       /**< Length of the periodic scheduling frame list */
     //FIFO related
-    const usb_dwc_hal_fifo_config_t *fifo_config;  /**< FIFO sizes configuration */
+    usb_dwc_hal_fifo_config_t fifo_config;         /**< FIFO sizes configuration */
     union {
         struct {
             uint32_t dbnc_lock_enabled: 1;      /**< Debounce lock enabled */
@@ -193,7 +192,7 @@ typedef struct {
     struct {
         int num_allocd;                             /**< Number of channels currently allocated */
         uint32_t chan_pend_intrs_msk;               /**< Bit mask of channels with pending interrupts */
-        usb_dwc_hal_chan_t *hdls[USB_DWC_NUM_HOST_CHAN];    /**< Handles of each channel. Set to NULL if channel has not been allocated */
+        usb_dwc_hal_chan_t *hdls[OTG_NUM_HOST_CHAN];    /**< Handles of each channel. Set to NULL if channel has not been allocated */
     } channels;
 } usb_dwc_hal_context_t;
 
@@ -425,17 +424,6 @@ static inline void usb_dwc_hal_port_set_frame_list(usb_dwc_hal_context_t *hal, u
     //Clear and save frame list
     hal->periodic_frame_list = frame_list;
     hal->frame_list_len = len;
-}
-
-/**
- * @brief Get the pointer to the periodic scheduling frame list
- *
- * @param hal Context of the HAL layer
- * @return uint32_t* Base address of the periodic scheduling frame list
- */
-static inline uint32_t *usb_dwc_hal_port_get_frame_list(usb_dwc_hal_context_t *hal)
-{
-    return hal->periodic_frame_list;
 }
 
 /**

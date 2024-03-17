@@ -22,6 +22,10 @@
 
   {IDF_TARGET_NAME} 有一个核，28 个外部异步中断。每个中断的优先级别都可独立地通过编程设置。此外，还有 4 个核心本地中断源 (CLINT)。详细信息请参见 **{IDF_TARGET_NAME} 技术参考手册** [`PDF <{IDF_TARGET_TRM_CN_URL}#riscvcpu>`__]。
 
+.. only:: esp32p4
+
+  {IDF_TARGET_NAME} 有两个核，每个核有 32 个外部异步中断。每个中断的优先级别都可独立地通过编程设置。此外，每个核还有 3 个核心本地中断源 (CLINT)。详细信息请参见 **{IDF_TARGET_NAME} 技术参考手册** [`PDF <{IDF_TARGET_TRM_CN_URL}#riscvcpu>`__]。
+
 由于中断源数量多于中断，有时多个驱动程序可以共用一个中断。:cpp:func:`esp_intr_alloc` 抽象隐藏了这些实现细节。
 
 驱动程序可以通过调用 :cpp:func:`esp_intr_alloc`，或 :cpp:func:`esp_intr_alloc_intrstatus` 为某个外设分配中断。通过向此函数传递 flag，可以指定中断类型、优先级和触发方式。然后，中断分配代码会找到适用的中断，使用中断矩阵将其连接到外设，并为其安装给定的中断处理程序和 ISR。
@@ -61,9 +65,18 @@
     外部外设中断
     ^^^^^^^^^^^^^^^^^^^^
 
-    剩余的中断源来自外部外设，在 ``soc/soc.h`` 中定义为 ``ETS_*_INTR_SOURCE``。
+    其余中断源来自外部外设。
 
-    两个 CPU 的非内部中断源槽都与中断矩阵相连，可以将任何外部中断源发送到这些中断槽中。
+.. only:: esp32p4
+
+    多核问题
+    --------
+
+    每个 {IDF_TARGET_NAME} 内核都同时提供内部中断和外部中断，内部中断由内核自身触发，外部中断由外设触发。但 ESP-IDF 仅使用 {IDF_TARGET_NAME} 上的外部中断。大多数 {IDF_TARGET_NAME} 中断源都属于外部中断。
+
+    每个内核的各个外部中断槽都与中断矩阵相连。通过中断矩阵可将任何外部中断源连接到任何中断槽，也可将多个外部中断源映射到同一个中断槽。外部中断源在 ``soc/interrupts.h`` 中定义为 ``ETS_*_INTR_SOURCE``。
+
+.. only:: SOC_HP_CPU_HAS_MULTIPLE_CORES
 
     - 外部中断会始终被分配到执行该分配的内核上。
     - 释放外部中断必须在分配该中断的内核上进行。
@@ -143,7 +156,7 @@ CPU 中断在大多数 Espressif SoC 上都是有限的资源。因此，一个�
 
 .. list::
 
-    :SOC_HP_CPU_HAS_MULTIPLE_CORES: - 在多核 SoC 上，尝试通过固定在第二个核的任务来初始化某些外设驱动程序。中断通常分配在运行外设驱动程序初始化函数的同一个内核上，因此，通过在第二个内核上运行初始化函数，就可以使用更多的中断输入。
+    :SOC_HP_CPU_HAS_MULTIPLE_CORES: - 在多核目标上，尝试通过固定在第二个核的任务来初始化某些外设驱动程序。中断通常分配在运行外设驱动程序初始化函数的同一个内核上，因此，通过在第二个内核上运行初始化函数，就可以使用更多的中断输入。
     - 找到可接受更高延迟的中断，并用 ``ESP_INTR_FLAG_SHARED`` flag （或与 ``ESP_INTR_FLAG_LOWMED`` 进行 OR 运算）分配这些中断。对两个或更多外设使用此 flag 能让它们使用单个中断输入，从而为其他外设节约中断输入。参见 :ref:`intr-alloc-shared-interrupts`。
     :not SOC_CPU_HAS_FLEXIBLE_INTC: - 一些外设驱动程序可能默认使用 ``ESP_INTR_FLAG_LEVEL1`` flag 来分配中断，因此默认情况下不会使用优先级为 2 或 3 的中断。如果 :cpp:func:`esp_intr_dump` 显示某些优先级为 2 或 3 的中断可用，尝试在初始化驱动程序时将中断分配 flag 改为 ``ESP_INTR_FLAG_LEVEL2`` 或 ``ESP_INTR_FLAG_LEVEL3``。
     - 检查是否有些外设驱动程序不需要一直启用，并按需将其初始化或取消初始化。这样可以减少同时分配的中断数量。

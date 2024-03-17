@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2020-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,9 +11,7 @@
 #include "esp_log.h"
 #include "esp_rom_gpio.h"
 #include "esp32c2/rom/spi_flash.h"
-#include "esp32c2/rom/efuse.h"
 #include "soc/gpio_periph.h"
-#include "soc/efuse_reg.h"
 #include "soc/spi_reg.h"
 #include "soc/spi_mem_reg.h"
 #include "soc/soc_caps.h"
@@ -34,6 +32,11 @@ void bootloader_flash_update_id()
 {
     esp_rom_spiflash_chip_t *chip = &rom_spiflash_legacy_data->chip;
     chip->device_id = bootloader_read_flash_id();
+}
+
+void bootloader_flash_update_size(uint32_t size)
+{
+    rom_spiflash_legacy_data->chip.chip_size = size;
 }
 
 void IRAM_ATTR bootloader_flash_cs_timing_config()

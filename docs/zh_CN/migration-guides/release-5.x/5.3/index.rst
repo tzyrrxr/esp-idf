@@ -6,5 +6,8 @@
 .. toctree::
     :maxdepth: 1
 
+    bluetooth-low-energy
     peripherals
+    security
+    storage
     system

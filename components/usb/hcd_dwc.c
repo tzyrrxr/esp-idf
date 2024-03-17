@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_heap_caps.h"
+#include "esp_dma_utils.h"
 #include "esp_intr_alloc.h"
 #include "soc/interrupts.h" // For interrupt index
 #include "esp_err.h"
@@ -21,7 +22,22 @@
 #include "usb_private.h"
 #include "usb/usb_types_ch9.h"
 
+#include "soc/soc_caps.h"
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#include "esp_cache.h"
+#include "esp_private/esp_cache_private.h"
+#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+
 // ----------------------------------------------------- Macros --------------------------------------------------------
+
+// ------------------ Target specific ----------------------
+// TODO: Remove target specific section after support for multiple USB peripherals is implemented
+#include "sdkconfig.h"
+#if (CONFIG_IDF_TARGET_ESP32P4)
+#define USB_INTR ETS_USB_OTG_INTR_SOURCE
+#else
+#define USB_INTR ETS_USB_INTR_SOURCE
+#endif
 
 // --------------------- Constants -------------------------
 
@@ -44,8 +60,10 @@
 
 #define XFER_LIST_LEN_CTRL                      3   // One descriptor for each stage
 #define XFER_LIST_LEN_BULK                      2   // One descriptor for transfer, one to support an extra zero length packet
+// Same length as the frame list makes it easier to schedule. Must be power of 2
+// FS: Must be 2-64. HS: Must be 8-256. See USB-OTG databook Table 5-47
 #define XFER_LIST_LEN_INTR                      FRAME_LIST_LEN
-#define XFER_LIST_LEN_ISOC                      FRAME_LIST_LEN  // Same length as the frame list makes it easier to schedule. Must be power of 2
+#define XFER_LIST_LEN_ISOC                      FRAME_LIST_LEN
 
 // ------------------------ Flags --------------------------
 
@@ -84,6 +102,29 @@ const char *HCD_DWC_TAG = "HCD DWC";
             }                                                               \
 })
 
+// ----------------------- Cache sync ----------------------
+
+/**
+ * @brief Cache sync macros
+ *
+ * This macros are relevant only for SOCs that have L1 cache for internal memory
+ * For other SOCs this is no-operation
+ */
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#define ALIGN_UP_BY(num, align)                     (((num) + ((align) - 1)) & ~((align) - 1))
+#define CACHE_SYNC_FRAME_LIST(frame_list)           cache_sync_frame_list(frame_list)
+#define CACHE_SYNC_XFER_DESCRIPTOR_LIST_M2C(buffer) cache_sync_xfer_descriptor_list(buffer, true)
+#define CACHE_SYNC_XFER_DESCRIPTOR_LIST_C2M(buffer) cache_sync_xfer_descriptor_list(buffer, false)
+#define CACHE_SYNC_DATA_BUFFER_M2C(pipe, urb)       cache_sync_data_buffer(pipe, urb, true)
+#define CACHE_SYNC_DATA_BUFFER_C2M(pipe, urb)       cache_sync_data_buffer(pipe, urb, false)
+#else // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#define CACHE_SYNC_FRAME_LIST(frame_list)
+#define CACHE_SYNC_XFER_DESCRIPTOR_LIST_M2C(buffer)
+#define CACHE_SYNC_XFER_DESCRIPTOR_LIST_C2M(buffer)
+#define CACHE_SYNC_DATA_BUFFER_M2C(pipe, urb)
+#define CACHE_SYNC_DATA_BUFFER_C2M(pipe, urb)
+#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+
 // ------------------------------------------------------ Types --------------------------------------------------------
 
 typedef struct pipe_obj pipe_t;
@@ -94,6 +135,7 @@ typedef struct port_obj port_t;
  */
 typedef struct {
     void *xfer_desc_list;
+    int xfer_desc_list_len_bytes;           // Only for cache msync
     urb_t *urb;
     union {
         struct {
@@ -235,6 +277,84 @@ static portMUX_TYPE hcd_lock = portMUX_INITIALIZER_UNLOCKED;
 static hcd_obj_t *s_hcd_obj = NULL;     // Note: "s_" is for the static pointer
 
 // ------------------------------------------------- Forward Declare ---------------------------------------------------
+
+// --------------------- Cache sync ------------------------
+
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+/**
+ * @brief Sync Frame List from cache to memory
+ */
+static inline void cache_sync_frame_list(void *frame_list)
+{
+    esp_err_t ret = esp_cache_msync(frame_list, FRAME_LIST_LEN * sizeof(uint32_t), 0);
+    assert(ret == ESP_OK);
+}
+
+/**
+ * @brief Sync Transfer Descriptor List
+ *
+ * @param[in] buffer       Buffer that holds the Transfer Descriptor List
+ * @param[in] mem_to_cache Direction of cache sync
+ */
+static inline void cache_sync_xfer_descriptor_list(dma_buffer_block_t *buffer, bool mem_to_cache)
+{
+    esp_err_t ret = esp_cache_msync(buffer->xfer_desc_list, buffer->xfer_desc_list_len_bytes, mem_to_cache ? ESP_CACHE_MSYNC_FLAG_DIR_M2C : 0);
+    assert(ret == ESP_OK);
+}
+
+/**
+ * @brief Sync Transfer data buffer
+ *
+ * This function must be called before a URB is enqueued or dequeued.
+ * Based on transfer direction (IN/OUT), this function will msync the data buffer associated with this URB.
+ *
+ * @note Here we also accept UNALIGNED data, for cases where the class drivers force overwrite the allocated data buffers
+ *
+ * @param[in] pipe Pipe belonging to this data buffer
+ * @param[in] urb  URB belonging to this data buffer
+ * @param[in] done Whether data buffer was just processed or is about to be processed
+ */
+static inline void cache_sync_data_buffer(pipe_t *pipe, urb_t *urb, bool done)
+{
+    const bool is_in = pipe->ep_char.bEndpointAddress & USB_B_ENDPOINT_ADDRESS_EP_DIR_MASK;
+    const bool is_ctrl = (pipe->ep_char.type == USB_DWC_XFER_TYPE_CTRL);
+    if ((is_in == done) || is_ctrl) {
+        uint32_t flags = (done) ? ESP_CACHE_MSYNC_FLAG_DIR_M2C : 0;
+        flags |= ESP_CACHE_MSYNC_FLAG_UNALIGNED;
+        esp_err_t ret = esp_cache_msync(urb->transfer.data_buffer, urb->transfer.data_buffer_size, flags);
+        assert(ret == ESP_OK);
+    }
+}
+#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+
+// --------------------- Allocation ------------------------
+
+/**
+ * @brief Allocate Frame List
+ *
+ * - Frame list is allocated in DMA capable memory
+ * - Frame list is aligned to 512 and cache line size
+ *
+ * @note Free the memory with heap_caps_free() call
+ *
+ * @param[in] frame_list_len Length of the Frame List
+ * @return Pointer to allocated frame list
+ */
+static void *frame_list_alloc(size_t frame_list_len);
+
+/**
+ * @brief Allocate Transfer Descriptor List
+ *
+ * - Frame list is allocated in DMA capable memory
+ * - Frame list is aligned to 512 and cache line size
+ *
+ * @note Free the memory with heap_caps_free() call
+ *
+ * @param[in]  list_len           Required length
+ * @param[out] list_len_bytes_out Allocated length in bytes (can be greater than required)
+ * @return Pointer to allocated transfer descriptor list
+ */
+static void *transfer_descriptor_list_alloc(size_t list_len, size_t *list_len_bytes_out);
 
 // ------------------- Buffer Control ----------------------
 
@@ -668,20 +788,20 @@ static bool _internal_pipe_event_notify(pipe_t *pipe, bool from_isr)
 static usb_speed_t get_usb_port_speed(usb_dwc_speed_t priv)
 {
     switch (priv) {
-        case USB_DWC_SPEED_LOW: return USB_SPEED_LOW;
-        case USB_DWC_SPEED_FULL: return USB_SPEED_FULL;
-        case USB_DWC_SPEED_HIGH: return USB_SPEED_HIGH;
-        default: abort();
+    case USB_DWC_SPEED_LOW: return USB_SPEED_LOW;
+    case USB_DWC_SPEED_FULL: return USB_SPEED_FULL;
+    case USB_DWC_SPEED_HIGH: return USB_SPEED_HIGH;
+    default: abort();
     }
 }
 
 static usb_hal_fifo_bias_t get_hal_fifo_bias(hcd_port_fifo_bias_t public)
 {
     switch (public) {
-        case HCD_PORT_FIFO_BIAS_BALANCED: return USB_HAL_FIFO_BIAS_DEFAULT;
-        case HCD_PORT_FIFO_BIAS_RX: return USB_HAL_FIFO_BIAS_RX;
-        case HCD_PORT_FIFO_BIAS_PTX: return USB_HAL_FIFO_BIAS_PTX;
-        default: abort();
+    case HCD_PORT_FIFO_BIAS_BALANCED: return USB_HAL_FIFO_BIAS_DEFAULT;
+    case HCD_PORT_FIFO_BIAS_RX: return USB_HAL_FIFO_BIAS_RX;
+    case HCD_PORT_FIFO_BIAS_PTX: return USB_HAL_FIFO_BIAS_PTX;
+    default: abort();
     }
 }
 
@@ -891,7 +1011,7 @@ static port_t *port_obj_alloc(void)
 {
     port_t *port = calloc(1, sizeof(port_t));
     usb_dwc_hal_context_t *hal = malloc(sizeof(usb_dwc_hal_context_t));
-    void *frame_list = heap_caps_aligned_calloc(USB_DWC_FRAME_LIST_MEM_ALIGN, FRAME_LIST_LEN, sizeof(uint32_t), MALLOC_CAP_DMA);
+    void *frame_list = frame_list_alloc(FRAME_LIST_LEN);
     SemaphoreHandle_t port_mux = xSemaphoreCreateMutex();
     if (port == NULL || hal == NULL || frame_list == NULL || port_mux == NULL) {
         free(port);
@@ -919,6 +1039,45 @@ static void port_obj_free(port_t *port)
     free(port);
 }
 
+void *frame_list_alloc(size_t frame_list_len)
+{
+    void *frame_list = heap_caps_aligned_calloc(USB_DWC_FRAME_LIST_MEM_ALIGN, frame_list_len, sizeof(uint32_t), MALLOC_CAP_DMA);
+
+    // Both Frame List start address and size should be already cache aligned so this is only a sanity check
+    if (frame_list) {
+        if (!esp_dma_is_buffer_aligned(frame_list, frame_list_len * sizeof(uint32_t), ESP_DMA_BUF_LOCATION_AUTO)) {
+            // This should never happen
+            heap_caps_free(frame_list);
+            frame_list = NULL;
+        }
+    }
+    return frame_list;
+}
+
+void *transfer_descriptor_list_alloc(size_t list_len, size_t *list_len_bytes_out)
+{
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    // Required Transfer Descriptor List size (in bytes) might not be aligned to cache line size, align the size up
+    size_t data_cache_line_size = 0;
+    esp_cache_get_alignment(ESP_CACHE_MALLOC_FLAG_DMA, &data_cache_line_size);
+    const size_t required_list_len_bytes = list_len * sizeof(usb_dwc_ll_dma_qtd_t);
+    *list_len_bytes_out = ALIGN_UP_BY(required_list_len_bytes, data_cache_line_size);
+#else
+    *list_len_bytes_out = list_len * sizeof(usb_dwc_ll_dma_qtd_t);
+#endif // SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+
+    void *qtd_list =  heap_caps_aligned_calloc(USB_DWC_QTD_LIST_MEM_ALIGN, *list_len_bytes_out, 1, MALLOC_CAP_DMA);
+
+    if (qtd_list) {
+        if (!esp_dma_is_buffer_aligned(qtd_list, *list_len_bytes_out * sizeof(usb_dwc_ll_dma_qtd_t), ESP_DMA_BUF_LOCATION_AUTO)) {
+            // This should never happen
+            heap_caps_free(qtd_list);
+            qtd_list = NULL;
+        }
+    }
+    return qtd_list;
+}
+
 // ----------------------- Public --------------------------
 
 esp_err_t hcd_install(const hcd_config_t *config)
@@ -940,7 +1099,7 @@ esp_err_t hcd_install(const hcd_config_t *config)
         goto port_alloc_err;
     }
     // Allocate interrupt
-    err_ret = esp_intr_alloc(ETS_USB_INTR_SOURCE,
+    err_ret = esp_intr_alloc(USB_INTR,
                              config->intr_flags | ESP_INTR_FLAG_INTRDISABLED,  // The interrupt must be disabled until the port is initialized
                              intr_hdlr_main,
                              (void *)p_hcd_obj_dmy->port_obj,
@@ -948,7 +1107,6 @@ esp_err_t hcd_install(const hcd_config_t *config)
     if (err_ret != ESP_OK) {
         goto intr_alloc_err;
     }
-    // Assign the
     HCD_ENTER_CRITICAL();
     if (s_hcd_obj != NULL) {
         HCD_EXIT_CRITICAL();
@@ -1026,6 +1184,7 @@ static void _port_recover_all_pipes(port_t *port)
         usb_dwc_hal_chan_alloc(port->hal, pipe->chan_obj, (void *)pipe);
         usb_dwc_hal_chan_set_ep_char(port->hal, pipe->chan_obj, &pipe->ep_char);
     }
+    CACHE_SYNC_FRAME_LIST(port->frame_list);
 }
 
 static bool _port_check_all_pipes_halted(port_t *port)
@@ -1472,13 +1631,15 @@ static dma_buffer_block_t *buffer_block_alloc(usb_transfer_type_t type)
         break;
     }
     dma_buffer_block_t *buffer = calloc(1, sizeof(dma_buffer_block_t));
-    void *xfer_desc_list = heap_caps_aligned_calloc(USB_DWC_QTD_LIST_MEM_ALIGN, desc_list_len, sizeof(usb_dwc_ll_dma_qtd_t), MALLOC_CAP_DMA);
+    size_t real_len = 0;
+    void *xfer_desc_list = transfer_descriptor_list_alloc(desc_list_len, &real_len);
     if (buffer == NULL || xfer_desc_list == NULL) {
         free(buffer);
         heap_caps_free(xfer_desc_list);
         return NULL;
     }
     buffer->xfer_desc_list = xfer_desc_list;
+    buffer->xfer_desc_list_len_bytes = real_len;
     return buffer;
 }
 
@@ -1536,9 +1697,9 @@ static bool pipe_alloc_hcd_support_verification(usb_dwc_hal_context_t *hal, cons
         }
     }
 
-    if (ep_desc->wMaxPacketSize > limit) {
+    if (USB_EP_DESC_GET_MPS(ep_desc) > limit) {
         ESP_LOGE(HCD_DWC_TAG, "EP MPS (%d) exceeds supported limit (%d)",
-                 ep_desc->wMaxPacketSize,
+                 USB_EP_DESC_GET_MPS(ep_desc),
                  limit);
         return false;
     }
@@ -1571,42 +1732,29 @@ static void pipe_set_ep_char(const hcd_pipe_config_t *pipe_config, usb_transfer_
         ep_char->mps = (pipe_config->dev_speed == USB_SPEED_LOW) ? CTRL_EP_MAX_MPS_LS : CTRL_EP_MAX_MPS_HSFS;
     } else {
         ep_char->bEndpointAddress = pipe_config->ep_desc->bEndpointAddress;
-        ep_char->mps = pipe_config->ep_desc->wMaxPacketSize;
+        ep_char->mps = USB_EP_DESC_GET_MPS(pipe_config->ep_desc);
     }
     ep_char->dev_addr = pipe_config->dev_addr;
     ep_char->ls_via_fs_hub = (port_speed == USB_SPEED_FULL && pipe_config->dev_speed == USB_SPEED_LOW);
     // Calculate the pipe's interval in terms of USB frames
     // @see USB-OTG programming guide chapter 6.5 for more information
     if (type == USB_TRANSFER_TYPE_INTR || type == USB_TRANSFER_TYPE_ISOCHRONOUS) {
-        unsigned int interval_frames;
-        unsigned int xfer_list_len;
-        if (type == USB_TRANSFER_TYPE_INTR) {
-            interval_frames = pipe_config->ep_desc->bInterval;
-            xfer_list_len = XFER_LIST_LEN_INTR;
+        // Convert bInterval field to real value
+        // @see USB 2.0 specs, Table 9-13
+        unsigned int interval_value;
+        if (type == USB_TRANSFER_TYPE_INTR && pipe_config->dev_speed != USB_SPEED_HIGH) {
+            interval_value = pipe_config->ep_desc->bInterval;
         } else {
-            interval_frames = (1 << (pipe_config->ep_desc->bInterval - 1));
-            xfer_list_len = XFER_LIST_LEN_ISOC;
+            interval_value = (1 << (pipe_config->ep_desc->bInterval - 1));
         }
-        // Round down interval to nearest power of 2
-        if (interval_frames >= 32) {
-            interval_frames = 32;
-        } else if (interval_frames >= 16) {
-            interval_frames = 16;
-        } else if (interval_frames >= 8) {
-            interval_frames = 8;
-        } else if (interval_frames >= 4) {
-            interval_frames = 4;
-        } else if (interval_frames >= 2) {
-            interval_frames = 2;
-        } else if (interval_frames >= 1) {
-            interval_frames = 1;
-        }
-        ep_char->periodic.interval = interval_frames;
+        ep_char->periodic.interval = interval_value;
         // We are the Nth pipe to be allocated. Use N as a phase offset
-        ep_char->periodic.phase_offset_frames = pipe_idx & (xfer_list_len - 1);
+        unsigned int xfer_list_len = (type == USB_TRANSFER_TYPE_INTR) ? XFER_LIST_LEN_INTR : XFER_LIST_LEN_ISOC;
+        ep_char->periodic.offset = (pipe_idx % xfer_list_len) % interval_value;
+        ep_char->periodic.is_hs = (pipe_config->dev_speed == USB_SPEED_HIGH);
     } else {
         ep_char->periodic.interval = 0;
-        ep_char->periodic.phase_offset_frames = 0;
+        ep_char->periodic.offset = 0;
     }
 }
 
@@ -1792,6 +1940,7 @@ esp_err_t hcd_pipe_alloc(hcd_port_handle_t port_hdl, const hcd_pipe_config_t *pi
         goto err;
     }
     usb_dwc_hal_chan_set_ep_char(port->hal, pipe->chan_obj, &pipe->ep_char);
+    CACHE_SYNC_FRAME_LIST(port->frame_list);
     // Add the pipe to the list of idle pipes in the port object
     TAILQ_INSERT_TAIL(&port->pipes_idle_tailq, pipe, tailq_entry);
     port->num_pipes_idle++;
@@ -2059,14 +2208,16 @@ static inline void _buffer_fill_intr(dma_buffer_block_t *buffer, usb_transfer_t 
     buffer->flags.intr.zero_len_packet = zero_len_packet;
 }
 
-static inline void _buffer_fill_isoc(dma_buffer_block_t *buffer, usb_transfer_t *transfer, bool is_in, int mps, int interval, int start_idx)
+static inline void IRAM_ATTR _buffer_fill_isoc(dma_buffer_block_t *buffer, usb_transfer_t *transfer, bool is_in, int mps, int interval, int start_idx)
 {
     assert(interval > 0);
+    assert(__builtin_popcount(interval) == 1); // Isochronous interval must be power of 2 according to USB2.0 specification
     int total_num_desc = transfer->num_isoc_packets * interval;
     assert(total_num_desc <= XFER_LIST_LEN_ISOC);
     int desc_idx = start_idx;
     int bytes_filled = 0;
-    // For each packet, fill in a descriptor and a interval-1 blank descriptor after it
+    // Zeroize the whole QTD, so we can focus only on the active descriptors
+    memset(buffer->xfer_desc_list, 0, XFER_LIST_LEN_ISOC * sizeof(usb_dwc_ll_dma_qtd_t));
     for (int pkt_idx = 0; pkt_idx < transfer->num_isoc_packets; pkt_idx++) {
         int xfer_len = transfer->isoc_packet_desc[pkt_idx].num_bytes;
         uint32_t flags = (is_in) ? USB_DWC_HAL_XFER_DESC_FLAG_IN : 0;
@@ -2076,16 +2227,8 @@ static inline void _buffer_fill_isoc(dma_buffer_block_t *buffer, usb_transfer_t 
         }
         usb_dwc_hal_xfer_desc_fill(buffer->xfer_desc_list, desc_idx, &transfer->data_buffer[bytes_filled], xfer_len, flags);
         bytes_filled += xfer_len;
-        if (++desc_idx >= XFER_LIST_LEN_ISOC) {
-            desc_idx = 0;
-        }
-        // Clear descriptors for unscheduled frames
-        for (int i = 0; i < interval - 1; i++) {
-            usb_dwc_hal_xfer_desc_clear(buffer->xfer_desc_list, desc_idx);
-            if (++desc_idx >= XFER_LIST_LEN_ISOC) {
-                desc_idx = 0;
-            }
-        }
+        desc_idx += interval;
+        desc_idx %= XFER_LIST_LEN_ISOC;
     }
     // Update buffer members and flags
     buffer->flags.isoc.num_qtds = total_num_desc;
@@ -2094,7 +2237,7 @@ static inline void _buffer_fill_isoc(dma_buffer_block_t *buffer, usb_transfer_t 
     buffer->flags.isoc.next_start_idx = desc_idx;
 }
 
-static void _buffer_fill(pipe_t *pipe)
+static void IRAM_ATTR _buffer_fill(pipe_t *pipe)
 {
     // Get an URB from the pending tailq
     urb_t *urb = TAILQ_FIRST(&pipe->pending_urb_tailq);
@@ -2116,29 +2259,46 @@ static void _buffer_fill(pipe_t *pipe)
         break;
     }
     case USB_DWC_XFER_TYPE_ISOCHRONOUS: {
-        uint32_t start_idx;
+        uint16_t start_idx;
+        // Interval in frames (FS) or microframes (HS). But it does not matter here, as each QTD represents one transaction in a frame or microframe
+        unsigned int interval = pipe->ep_char.periodic.interval;
+        if (interval > XFER_LIST_LEN_ISOC) {
+            // Each QTD in the list corresponds to one frame/microframe. Interval > Descriptor_list does not make sense here.
+            interval = XFER_LIST_LEN_ISOC;
+        }
         if (pipe->multi_buffer_control.buffer_num_to_exec == 0) {
             // There are no more previously filled buffers to execute. We need to calculate a new start index based on HFNUM and the pipe's schedule
-            uint32_t cur_frame_num = usb_dwc_hal_port_get_cur_frame_num(pipe->port->hal);
-            uint32_t cur_mod_idx_no_offset = (cur_frame_num - pipe->ep_char.periodic.phase_offset_frames) & (XFER_LIST_LEN_ISOC - 1);    // Get the modulated index (i.e., the Nth desc in the descriptor list)
-            // This is the non-offset modulated QTD index of the last scheduled interval
-            uint32_t last_interval_mod_idx_no_offset = (cur_mod_idx_no_offset / pipe->ep_char.periodic.interval) * pipe->ep_char.periodic.interval; // Floor divide and the multiply again
-            uint32_t next_interval_idx_no_offset = (last_interval_mod_idx_no_offset + pipe->ep_char.periodic.interval);
-            // We want at least a half interval or 2 frames of buffer space
-            if (next_interval_idx_no_offset - cur_mod_idx_no_offset > (pipe->ep_char.periodic.interval / 2)
-                    && next_interval_idx_no_offset - cur_mod_idx_no_offset >= 2) {
-                start_idx = (next_interval_idx_no_offset + pipe->ep_char.periodic.phase_offset_frames) & (XFER_LIST_LEN_ISOC - 1);
-            } else {
-                // Not enough time until the next schedule, add another interval to it.
-                start_idx =  (next_interval_idx_no_offset + pipe->ep_char.periodic.interval + pipe->ep_char.periodic.phase_offset_frames) & (XFER_LIST_LEN_ISOC - 1);
+            uint16_t cur_frame_num = usb_dwc_hal_port_get_cur_frame_num(pipe->port->hal);
+            start_idx = cur_frame_num + 1; // This is the next frame that the periodic scheduler will fetch
+            uint16_t rem_time = usb_dwc_ll_hfnum_get_frame_time_rem(pipe->port->hal->dev);
+
+            // If there is not enough time remaining in this frame, consider the next frame as start index
+            // The remaining time is in USB PHY clocks. The threshold value is time between buffer fill and execute (6-11us) = 180 + 5 x num_packets
+            if (rem_time < 195 + 5 * transfer->num_isoc_packets) {
+                if (rem_time > 165 + 5 * transfer->num_isoc_packets) {
+                    // If the remaining time is +-15 PHY clocks around the threshold value we cannot be certain whether we will schedule it in time for this frame
+                    // Busy wait 10us to be sure that we are at the beginning of next frame/microframe
+                    esp_rom_delay_us(10);
+                }
+                start_idx++;
             }
+
+            // Only every (interval + offset) transfer belongs to this channel
+            // Following calculation effectively rounds up to nearest (interval + offset)
+            if (interval > 1) {
+                uint32_t interval_offset = (start_idx - pipe->ep_char.periodic.offset) % interval; // Can be <0, interval)
+                if (interval_offset > 0) {
+                    start_idx += interval - interval_offset;
+                }
+            }
+            start_idx %= XFER_LIST_LEN_ISOC;
         } else {
             // Start index is based on previously filled buffer
             uint32_t prev_buffer_idx = (pipe->multi_buffer_control.wr_idx - 1) & (NUM_BUFFERS - 1);
             dma_buffer_block_t *prev_filled_buffer = pipe->buffers[prev_buffer_idx];
             start_idx = prev_filled_buffer->flags.isoc.next_start_idx;
         }
-        _buffer_fill_isoc(buffer_to_fill, transfer, is_in, mps, (int)pipe->ep_char.periodic.interval, start_idx);
+        _buffer_fill_isoc(buffer_to_fill, transfer, is_in, mps, (int)interval, start_idx);
         break;
     }
     case USB_DWC_XFER_TYPE_BULK: {
@@ -2154,6 +2314,8 @@ static void _buffer_fill(pipe_t *pipe)
         break;
     }
     }
+    // Sync transfer descriptor list to memory
+    CACHE_SYNC_XFER_DESCRIPTOR_LIST_C2M(buffer_to_fill);
     buffer_to_fill->urb = urb;
     urb->hcd_var = URB_HCD_STATE_INFLIGHT;
     // Update multi buffer flags
@@ -2162,7 +2324,7 @@ static void _buffer_fill(pipe_t *pipe)
     pipe->multi_buffer_control.buffer_num_to_exec++;
 }
 
-static void _buffer_exec(pipe_t *pipe)
+static void IRAM_ATTR _buffer_exec(pipe_t *pipe)
 {
     assert(pipe->multi_buffer_control.rd_idx != pipe->multi_buffer_control.wr_idx || pipe->multi_buffer_control.buffer_num_to_exec > 0);
     dma_buffer_block_t *buffer_to_exec = pipe->buffers[pipe->multi_buffer_control.rd_idx];
@@ -2390,6 +2552,9 @@ static void _buffer_parse(pipe_t *pipe)
     bool is_in = pipe->ep_char.bEndpointAddress & USB_B_ENDPOINT_ADDRESS_EP_DIR_MASK;
     int mps = pipe->ep_char.mps;
 
+    // Sync transfer descriptor list to cache
+    CACHE_SYNC_XFER_DESCRIPTOR_LIST_M2C(buffer_to_parse);
+
     // Parsing the buffer will update the buffer's corresponding URB
     if (buffer_to_parse->status_flags.pipe_event == HCD_PIPE_EVENT_URB_DONE) {
         // URB was successful
@@ -2456,6 +2621,15 @@ esp_err_t hcd_urb_enqueue(hcd_pipe_handle_t pipe_hdl, urb_t *urb)
     // Check that URB has not already been enqueued
     HCD_CHECK(urb->hcd_ptr == NULL && urb->hcd_var == URB_HCD_STATE_IDLE, ESP_ERR_INVALID_STATE);
     pipe_t *pipe = (pipe_t *)pipe_hdl;
+    // Check if the ISOC pipe can handle all packets:
+    // In case the pipe's interval is too long and there are too many ISOC packets, they might not fit into the transfer descriptor list
+    HCD_CHECK(
+        !((pipe->ep_char.type == USB_DWC_XFER_TYPE_ISOCHRONOUS) && (urb->transfer.num_isoc_packets * pipe->ep_char.periodic.interval > XFER_LIST_LEN_ISOC)),
+        ESP_ERR_INVALID_SIZE
+    );
+
+    // Sync user's data from cache to memory. For OUT and CTRL transfers
+    CACHE_SYNC_DATA_BUFFER_C2M(pipe, urb);
 
     HCD_ENTER_CRITICAL();
     // Check that pipe and port are in the correct state to receive URBs
@@ -2513,6 +2687,8 @@ urb_t *hcd_urb_dequeue(hcd_pipe_handle_t pipe_hdl)
             pipe->port->num_pipes_queued--;
             pipe->cs_flags.has_urb = 0;
         }
+        // Sync user's data in memory to cache. For IN and CTRL transfers
+        CACHE_SYNC_DATA_BUFFER_M2C(pipe, urb);
     } else {
         // No more URBs to dequeue from this pipe
         urb = NULL;

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -74,6 +74,9 @@ typedef enum {
 #define I2C_LL_SLAVE_RX_EVENT_INTR  (I2C_TRANS_COMPLETE_INT_ENA_M | I2C_RXFIFO_WM_INT_ENA_M | I2C_SLAVE_STRETCH_INT_ENA_M)
 #define I2C_LL_SLAVE_TX_EVENT_INTR  (I2C_TXFIFO_WM_INT_ENA_M)
 #define I2C_LL_RESET_SLV_SCL_PULSE_NUM_DEFAULT   (9)
+
+// I2C sleep retention module
+#define I2C_SLEEP_RETENTION_MODULE(i2c_num) ((i2c_num == 0) ? SLEEP_RETENTION_MODULE_I2C0 : SLEEP_RETENTION_MODULE_I2C1)
 
 /**
  * @brief  Calculate I2C bus frequency
@@ -849,6 +852,20 @@ __attribute__((always_inline))
 static inline void i2c_ll_slave_clear_stretch(i2c_dev_t *dev)
 {
     dev->scl_stretch_conf.slave_scl_stretch_clr = 1;
+}
+
+/**
+ * @brief Check if i2c command is done.
+ *
+ * @param  hw Beginning address of the peripheral registers
+ * @param  cmd_idx The index of the command register, must be less than 8
+ *
+ * @return True if the `cmd_idx` command is done. Otherwise false.
+ */
+__attribute__((always_inline))
+static inline bool i2c_ll_master_is_cmd_done(i2c_dev_t *hw, int cmd_idx)
+{
+    return hw->command[cmd_idx].command_done;
 }
 
 //////////////////////////////////////////Deprecated Functions//////////////////////////////////////////////////////////

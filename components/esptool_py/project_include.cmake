@@ -5,7 +5,17 @@ idf_build_get_property(target IDF_TARGET)
 idf_build_get_property(python PYTHON)
 idf_build_get_property(idf_path IDF_PATH)
 
+
 set(chip_model ${target})
+
+# TODO: [ESP32C5] IDF-9197 remove this 'if' block when esp32C5 beta3 is no longer supported
+if(target STREQUAL "esp32c5")
+    if(CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION)
+        set(chip_model esp32c5beta3)
+    elseif(CONFIG_IDF_TARGET_ESP32C5_MP_VERSION)
+        set(chip_model esp32c5)
+    endif()
+endif()
 
 set(ESPTOOLPY ${python} "$ENV{ESPTOOL_WRAPPER}" "${CMAKE_CURRENT_LIST_DIR}/esptool/esptool.py" --chip ${chip_model})
 set(ESPSECUREPY ${python} "${CMAKE_CURRENT_LIST_DIR}/esptool/espsecure.py")
@@ -100,8 +110,6 @@ endif()
 
 list(APPEND esptool_elf2image_args --min-rev-full ${CONFIG_ESP_REV_MIN_FULL})
 list(APPEND esptool_elf2image_args --max-rev-full ${CONFIG_ESP_REV_MAX_FULL})
-
-set(monitor_rev_args "--revision;${CONFIG_ESP_REV_MIN_FULL}")
 
 if(CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE)
     # Set ESPFLASHSIZE to 'detect' *after* esptool_elf2image_args are generated,
@@ -232,11 +240,30 @@ add_custom_target(uf2-app
     VERBATIM
     )
 
+
+set(MONITOR_ARGS "")
+
+list(APPEND MONITOR_ARGS "--toolchain-prefix;${_CMAKE_TOOLCHAIN_PREFIX};")
+
+if(CONFIG_ESP_COREDUMP_DECODE)
+list(APPEND MONITOR_ARGS "--decode-coredumps;${CONFIG_ESP_COREDUMP_DECODE};")
+endif()
+
+list(APPEND MONITOR_ARGS "--target;${target};")
+
+list(APPEND MONITOR_ARGS "--revision;${CONFIG_ESP_REV_MIN_FULL};")
+
+if(CONFIG_IDF_TARGET_ARCH_RISCV)
+    list(APPEND MONITOR_ARGS "--decode-panic;backtrace;")
+endif()
+
+list(APPEND MONITOR_ARGS "$<TARGET_FILE:$<GENEX_EVAL:${elf}>>")
+
 add_custom_target(monitor
     COMMAND ${CMAKE_COMMAND}
     -D "IDF_PATH=${idf_path}"
     -D "SERIAL_TOOL=${ESPMONITOR}"
-    -D "SERIAL_TOOL_ARGS=--target;${target};${monitor_rev_args};$<TARGET_FILE:$<GENEX_EVAL:${elf}>>"
+    -D "SERIAL_TOOL_ARGS=${MONITOR_ARGS}"
     -D "WORKING_DIRECTORY=${build_dir}"
     -P run_serial_tool.cmake
     WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}

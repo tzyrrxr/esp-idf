@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -10,7 +10,6 @@
 #include <stdbool.h>
 #include "soc/efuse_periph.h"
 #include "hal/assert.h"
-#include "esp32p4/rom/efuse.h"
 
 #ifdef __cplusplus
 extern "C" {
