@@ -11,7 +11,6 @@
 #include "esp_log.h"
 #include "esp_image_format.h"
 #include "esp_secure_boot.h"
-#include "spi_flash_mmap.h"
 #include "esp_fault.h"
 #include "esp32/rom/sha.h"
 #include "uECC_verify_antifault.h"
@@ -70,7 +69,7 @@ esp_err_t esp_secure_boot_verify_ecdsa_signature_block(const esp_secure_boot_sig
         return ESP_FAIL;
     }
 
-    if (sig_block->version != 0) {
+    if (sig_block->version != ESP_SECURE_BOOT_SCHEME) {
         ESP_LOGE(TAG, "image has invalid signature version field 0x%08" PRIx32 " (image without a signature?)", sig_block->version);
         return ESP_FAIL;
     }

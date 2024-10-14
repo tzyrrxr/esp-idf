@@ -49,6 +49,7 @@ typedef enum {
 #define RTC_SLEEP_DIG_USE_8M            BIT(16)
 #define RTC_SLEEP_USE_ADC_TESEN_MONITOR BIT(17)
 #define RTC_SLEEP_NO_ULTRA_LOW          BIT(18) //!< Avoid using ultra low power in deep sleep, in which RTCIO cannot be used as input, and RTCMEM can't work under high temperature
+#define RTC_SLEEP_XTAL_AS_RTC_FAST      BIT(19)
 
 #if SOC_PM_SUPPORT_EXT0_WAKEUP
 #define RTC_EXT0_TRIG_EN            PMU_EXT0_WAKEUP_EN      //!< EXT0 wakeup
@@ -62,7 +63,11 @@ typedef enum {
 #define RTC_EXT1_TRIG_EN            0
 #endif
 
-#define RTC_GPIO_TRIG_EN            PMU_GPIO_WAKEUP_EN      //!< GPIO wakeup
+#if SOC_LP_IO_HAS_INDEPENDENT_WAKEUP_SOURCE
+#define RTC_GPIO_TRIG_EN            (PMU_GPIO_WAKEUP_EN | PMU_LP_GPIO_WAKEUP_EN)      //!< GPIO & LP_GPIO wakeup
+#else
+#define RTC_GPIO_TRIG_EN            (PMU_GPIO_WAKEUP_EN)
+#endif
 
 #if SOC_LP_TIMER_SUPPORTED
 #define RTC_TIMER_TRIG_EN           PMU_LP_TIMER_WAKEUP_EN  //!< Timer wakeup
@@ -90,6 +95,12 @@ typedef enum {
 #define RTC_BT_TRIG_EN              0
 #endif
 
+#if SOC_TOUCH_SENSOR_SUPPORTED
+#define RTC_TOUCH_TRIG_EN           PMU_TOUCH_WAKEUP_EN     //!< TOUCH wakeup
+#else
+#define RTC_TOUCH_TRIG_EN           0
+#endif
+
 #define RTC_USB_TRIG_EN             PMU_USB_WAKEUP_EN
 
 #if SOC_LP_CORE_SUPPORTED
@@ -113,6 +124,7 @@ typedef enum {
                                RTC_UART1_TRIG_EN        | \
                                RTC_BT_TRIG_EN           | \
                                RTC_LP_CORE_TRIG_EN      | \
+                               RTC_TOUCH_TRIG_EN        | \
                                RTC_XTAL32K_DEAD_TRIG_EN | \
                                RTC_USB_TRIG_EN          | \
                                RTC_BROWNOUT_DET_TRIG_EN)
@@ -149,12 +161,6 @@ typedef struct {
 } pmu_context_t;
 
 pmu_context_t * PMU_instance(void);
-
-typedef enum pmu_hp_sysclk_src {
-    PMU_HP_SYSCLK_XTAL = 0,
-    PMU_HP_SYSCLK_PLL,
-    PMU_HP_SYSCLK_FOSC
-} pmu_hp_sysclk_src_t;
 
 typedef enum pmu_sleep_protect_mode {
     PMU_SLEEP_PROTECT_HP_SLEEP = 0,
@@ -270,7 +276,7 @@ void pmu_sleep_shutdown_dcdc(void);
  * @brief DCDC has taken over power supply, shut down LDO to save power consumption
  */
 void pmu_sleep_shutdown_ldo(void);
-#endif
+#endif // SOC_DCDC_SUPPORTED
 
 /**
  * @brief Enter deep or light sleep mode
@@ -302,9 +308,10 @@ uint32_t pmu_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt, uint32_t lslp
 
 /**
  * @brief   Finish sleep process settings and get sleep reject status
+ * @param   dslp True if sleep requests id deep-sleep
  * @return  return sleep reject status
  */
-bool pmu_sleep_finish(void);
+bool pmu_sleep_finish(bool dslp);
 
 /**
  * @brief Initialize PMU related power/clock/digital parameters and functions

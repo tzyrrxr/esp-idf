@@ -21,6 +21,12 @@ if(CONFIG_SOC_ECDSA_SUPPORTED)
    list(APPEND srcs "ecdsa/test_ecdsa.c")
 endif()
 
+if(CONFIG_SOC_KEY_MANAGER_SUPPORTED)
+   list(APPEND srcs "key_manager/test_key_manager.c"
+                    "$ENV{IDF_PATH}/components/esp_security/src/esp_key_mgr.c")
+   list(APPEND priv_include_dirs "$ENV{IDF_PATH}/components/esp_security/include")
+endif()
+
 if(CONFIG_SOC_AES_SUPPORTED)
    list(APPEND srcs "aes/test_aes.c"
                      "$ENV{IDF_PATH}/components/mbedtls/port/aes/esp_aes_common.c"
@@ -49,14 +55,26 @@ if(CONFIG_SOC_SHA_SUPPORTED)
    if(NOT CONFIG_SOC_SHA_SUPPORT_PARALLEL_ENG)
       list(APPEND srcs "sha/test_sha.c"
                         "sha/sha_block.c")
+      list(APPEND priv_include_dirs "sha/include"
+                                    "$ENV{IDF_PATH}/components/mbedtls/port/include")
+
       if(CONFIG_SOC_SHA_SUPPORT_DMA)
-         list(APPEND srcs "sha/sha_dma.c")
+         list(APPEND srcs "sha/sha_dma.c"
+                           "$ENV{IDF_PATH}/components/mbedtls/port/sha/dma/sha.c")
+         list(APPEND priv_include_dirs "$ENV{IDF_PATH}/components/mbedtls/port/sha/dma/include")
+
+         if(NOT CONFIG_SOC_SHA_GDMA)
+            list(APPEND srcs "$ENV{IDF_PATH}/components/mbedtls/port/sha/dma/esp_sha_crypto_dma_impl.c")
+         else()
+            list(APPEND srcs "$ENV{IDF_PATH}/components/mbedtls/port/sha/dma/esp_sha_gdma_impl.c"
+                              "$ENV{IDF_PATH}/components/mbedtls/port/crypto_shared_gdma/esp_crypto_shared_gdma.c")
+         endif()
       endif()
    endif()
 endif()
 
 idf_component_register(SRCS ${srcs}
-                       PRIV_REQUIRES efuse mbedtls esp_mm
+                       PRIV_REQUIRES efuse mbedtls esp_security esp_mm bootloader_support spi_flash
                        REQUIRES test_utils unity
                        WHOLE_ARCHIVE
                        PRIV_INCLUDE_DIRS "${priv_include_dirs}"

@@ -502,7 +502,7 @@ def report_progress(count: int, block_size: int, total_size: int) -> None:
 def mkdir_p(path: str) -> None:
     """
     Makes directory in given path.
-    Supresses error when directory is already created or path is a path to file.
+    Suppresses error when directory is already created or path is a path to file.
     """
     try:
         os.makedirs(path)
@@ -607,7 +607,7 @@ def urlretrieve_ctx(url: str,
 
 def download(url: str, destination: str) -> Union[None, Exception]:
     """
-    Download from given url and save into given destiantion.
+    Download from given url and save into given destination.
     """
     info(f'Downloading {url}')
     info(f'Destination: {destination}')
@@ -764,7 +764,7 @@ class IDFToolVersion(object):
             platform_name = Platforms.get(platform_name)
             if platform_name in self.downloads.keys():
                 return self.downloads[platform_name]
-        # exception can be ommited, as not detected platform is handled without err message
+        # exception can be omitted, as not detected platform is handled without err message
         except ValueError:
             pass
         if 'any' in self.downloads.keys():
@@ -927,17 +927,30 @@ class IDFTool(object):
 
         try:
             version_cmd_result = run_cmd_check_output(cmd, None, extra_paths)
-        except OSError:
+        except OSError as e:
             # tool is not on the path
-            raise ToolNotFoundError(f'Tool {self.name} not found')
+            raise ToolNotFoundError(f'Tool {self.name} not found with error: {e}')
         except subprocess.CalledProcessError as e:
-            raise ToolExecError(f'returned non-zero exit code ({e.returncode}) with error message:\n{e.stderr.decode("utf-8",errors="ignore")}')  # type: ignore
+            raise ToolExecError(f'non-zero exit code ({e.returncode}) with message: {e.stderr.decode("utf-8",errors="ignore")}')  # type: ignore
 
         in_str = version_cmd_result.decode('utf-8')
         match = re.search(self._current_options.version_regex, in_str)  # type: ignore
         if not match:
             return UNKNOWN_VERSION
         return re.sub(self._current_options.version_regex, self._current_options.version_regex_replace, match.group(0))  # type: ignore
+
+    def check_binary_valid(self, version: str) -> bool:
+        if not self.is_executable:
+            return True
+        try:
+            ver_str = self.get_version(self.get_export_paths(version))
+        except (ToolNotFoundError, ToolExecError) as e:
+            fatal(f'tool {self.name} version {version} is installed, but getting error: {e}')
+            return False
+        if ver_str != version:
+            # just print, state is still valid
+            warn(f'tool {self.name} version {version} is installed, but reporting version {ver_str}')
+        return True
 
     def check_version(self, executable_path: Optional[str]) -> bool:
         """
@@ -982,7 +995,7 @@ class IDFTool(object):
 
     def get_recommended_version(self) -> Optional[str]:
         """
-        Get all reccomended versions of the tool. If more versions are recommended, highest version is returned.
+        Get all recommended versions of the tool. If more versions are recommended, highest version is returned.
         """
         recommended_versions = [k for k, v in self.versions.items()
                                 if v.status == IDFToolVersion.STATUS_RECOMMENDED
@@ -1021,7 +1034,7 @@ class IDFTool(object):
             # not in PATH
             pass
         except ToolExecError as e:
-            fatal(f'tool {self.name} found in path, but {e}')
+            fatal(f'tool {self.name} is found in PATH, but has failed: {e}')
             tool_error = True
         else:
             self.version_in_path = ver_str
@@ -1040,10 +1053,10 @@ class IDFTool(object):
                 continue
             try:
                 ver_str = self.get_version(self.get_export_paths(version))
-            except ToolNotFoundError:
-                warn(f'directory for tool {self.name} version {version} is present, but tool was not found')
+            except ToolNotFoundError as e:
+                warn(f'directory for tool {self.name} version {version} is present, but the tool has not been found: {e}')
             except ToolExecError as e:
-                fatal(f'tool {self.name} version {version} is installed, but {e}')
+                fatal(f'tool {self.name} version {version} is installed, but cannot be run: {e}')
                 tool_error = True
             else:
                 if ver_str != version:
@@ -1138,6 +1151,10 @@ class IDFTool(object):
         unpack(archive_path, dest_dir)
         if self._current_options.strip_container_dirs:  # type: ignore
             do_strip_container_dirs(dest_dir, self._current_options.strip_container_dirs)  # type: ignore
+        if not self.check_binary_valid(version):
+            fatal(f'Failed to check the tool while installed. Removing directory {dest_dir}')
+            shutil.rmtree(dest_dir)
+            raise SystemExit(1)
 
     @staticmethod
     def check_download_file(download_obj: IDFToolDownload, local_path: str) -> bool:
@@ -1645,44 +1662,30 @@ def get_idf_version() -> str:
     """
     Return ESP-IDF version.
     """
-    version_file_path = os.path.join(g.idf_path, 'version.txt')  # type: ignore
+    idf_version: Optional[str] = None
+
+    version_file_path = os.path.join(g.idf_path, 'version.txt')
     if os.path.exists(version_file_path):
         with open(version_file_path, 'r') as version_file:
             idf_version_str = version_file.read()
-    else:
-        idf_version_str = ''
+
+        match = re.match(r'^v([0-9]+\.[0-9]+).*', idf_version_str)
+        if match:
+            idf_version = match.group(1)
+
+    if idf_version is None:
         try:
-            idf_version_str = subprocess.check_output(['git', 'describe'],
-                                                      cwd=g.idf_path, env=os.environ,
-                                                      stderr=subprocess.DEVNULL).decode()
-        except OSError:
-            # OSError should cover FileNotFoundError and WindowsError
-            warn('Git was not found')
-        except subprocess.CalledProcessError:
-            # This happens quite often when the repo is shallow. Don't print a warning because there are other
-            # possibilities for version detection.
-            pass
-    match = re.match(r'^v([0-9]+\.[0-9]+).*', idf_version_str)
-    if match:
-        idf_version: Optional[str] = match.group(1)
-    else:
-        idf_version = None
-        # fallback when IDF is a shallow clone
-        try:
-            with open(os.path.join(g.idf_path, 'components', 'esp_common', 'include', 'esp_idf_version.h')) as f:  # type: ignore
+            with open(os.path.join(g.idf_path, 'components', 'esp_common', 'include', 'esp_idf_version.h')) as f:
                 m = re.search(r'^#define\s+ESP_IDF_VERSION_MAJOR\s+(\d+).+?^#define\s+ESP_IDF_VERSION_MINOR\s+(\d+)',
                               f.read(), re.DOTALL | re.MULTILINE)
                 if m:
                     idf_version = '.'.join((m.group(1), m.group(2)))
                 else:
-                    warn('Reading IDF version from C header file failed!')
+                    fatal('Reading IDF version from C header file failed!')
+                    raise SystemExit(1)
         except Exception as e:
-            warn(f'Is it not possible to determine the IDF version: {e}')
-
-    if idf_version is None:
-        fatal('IDF version cannot be determined')
-        raise SystemExit(1)
-
+            fatal(f'It is not possible to determine the IDF version: {e}')
+            raise SystemExit(1)
     return idf_version
 
 
@@ -1705,7 +1708,7 @@ def get_python_env_path() -> Tuple[str, str, str, str]:
 
 def parse_tools_arg(tools_str: List[str]) -> List[str]:
     """
-    Base parsing "tools" argumets: all, required, etc.
+    Base parsing "tools" arguments: all, required, etc.
     """
     if not tools_str:
         return ['required']
@@ -1848,9 +1851,9 @@ def add_variables_to_deactivate_file(args: List[str], new_idf_vars:Dict[str, Any
     return deactivate_file_path
 
 
-def deactivate_statement(args: List[str]) -> None:
+def print_deactivate_statement(args: List[str]) -> None:
     """
-    Deactivate statement is sequence of commands, that remove IDF global variables from enviroment,
+    Deactivate statement is sequence of commands, that remove IDF global variables from environment,
     so the environment gets to the state it was before calling export.{sh/fish} script.
     """
     env_state_obj = ENVState.get_env_state()
@@ -1930,7 +1933,6 @@ def list_default(args):  # type: ignore
     Prints currently installed versions of all tools compatible with current platform.
     """
     tools_info = load_tools_info()
-    tool_error = False
     for name, tool in tools_info.items():
         if tool.get_install_type() == IDFTool.INSTALL_NEVER:
             continue
@@ -1939,7 +1941,7 @@ def list_default(args):  # type: ignore
         try:
             tool.find_installed_versions()
         except ToolBinaryError:
-            tool_error = True
+            pass
         versions_for_platform = {k: v for k, v in tool.versions.items() if v.compatible_with_platform()}
         if not versions_for_platform:
             info(f'  (no versions compatible with platform {PYTHON_PLATFORM})')
@@ -1949,8 +1951,6 @@ def list_default(args):  # type: ignore
             version_obj = tool.versions[version]
             info('  - {} ({}{})'.format(version, version_obj.status,
                                         ', installed' if version in tool.versions_installed else ''))
-    if tool_error:
-        raise SystemExit(1)
 
 
 def list_outdated(args):  # type: ignore
@@ -2061,7 +2061,12 @@ def handle_missing_versions(
     """
     Prints the info about missing tool to stderr if tool has no supported versions installed.
     """
-    fatal(f'tool {tool.name} has no installed versions. Please run \'{install_cmd}\' to install it.')
+    msg = f'tool {tool.name} has no installed versions.'
+    if 'NIX_PATH' in os.environ:
+        fatal(f'{msg} The environment indicates that you might be using NixOS. '
+              'Please see https://nixos.wiki/wiki/ESP-IDF for how to install tools for it.')
+    else:
+        fatal(f'{msg} Please run \'{install_cmd}\' to install it.')
     if tool.version_in_path and tool.version_in_path not in tool.versions:
         info(f'An unsupported version of tool {tool_name} was found in PATH: {tool.version_in_path}. ' +
              prefer_system_hint, f=sys.stderr)
@@ -2088,7 +2093,7 @@ def process_tool(
     try:
         tool.find_installed_versions()
     except ToolBinaryError:
-        tool_found = False
+        pass
     recommended_version_to_use = tool.get_preferred_installed_version()
 
     if not tool.is_executable and recommended_version_to_use:
@@ -2139,15 +2144,17 @@ def check_python_venv_compatibility(idf_python_env_path: str, idf_version: str) 
             raise SystemExit(1)
     except OSError as e:
         # perhaps the environment was generated before the support for VENV_VER_FILE was added
-        warn(f'Error while accessing the ESP-IDF version file in the Python environment: {e}')
+        warn(f'The following issue occurred while accessing the ESP-IDF version file in the Python environment: {e}. '
+             '(Diagnostic information. It can be ignored.)')
 
 
 def action_export(args: Any) -> None:
     """
     Exports all necessary environment variables and paths needed for tools used.
     """
-    if args.deactivate and different_idf_detected():
-        deactivate_statement(args)
+    if args.deactivate:
+        if different_idf_detected():
+            print_deactivate_statement(args)
         return
 
     tools_info = load_tools_info()
@@ -2313,7 +2320,7 @@ def get_tools_spec_and_platform_info(selected_platform: str, targets: List[str],
 def action_download(args):  # type: ignore
     """
     Saves current IDF environment and for every tools in tools_spec, downloads the right archive for tools version and target platform, if possible.
-    If not, prints apropriate message to stderr  and raise SystemExit() expception.
+    If not, prints appropriate message to stderr and raise SystemExit() exception.
     """
     tools_spec = parse_tools_arg(args.tools)
 
@@ -2389,7 +2396,6 @@ def action_install(args):  # type: ignore
     tools_info = load_tools_info()
     tools_spec = expand_tools_arg(tools_spec, tools_info, targets)
     info(f'Installing tools: {", ".join(tools_spec)}')
-    tool_error = False
     for tool_spec in tools_spec:
         if '@' not in tool_spec:
             tool_name = tool_spec
@@ -2412,7 +2418,7 @@ def action_install(args):  # type: ignore
         try:
             tool_obj.find_installed_versions()
         except ToolBinaryError:
-            tool_error = True
+            pass
         tool_spec = f'{tool_name}@{tool_version}'
         if tool_version in tool_obj.versions_installed:
             info(f'Skipping {tool_spec} (already installed)')
@@ -2424,9 +2430,6 @@ def action_install(args):  # type: ignore
 
         tool_obj.download(tool_version)
         tool_obj.install(tool_version)
-
-    if tool_error:
-        raise SystemExit(1)
 
 
 def get_wheels_dir() -> Optional[str]:
@@ -2602,18 +2605,12 @@ def action_install_python_env(args):  # type: ignore
         warn(f'Removing the existing Python environment in {idf_python_env_path}')
         shutil.rmtree(idf_python_env_path)
 
-    venv_can_upgrade = False
-
     if os.path.exists(virtualenv_python):
         check_python_venv_compatibility(idf_python_env_path, idf_version)
     else:
         if subprocess.run([sys.executable, '-m', 'venv', '-h'], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             # venv available
             virtualenv_options = ['--clear']  # delete environment if already exists
-            if sys.version_info[:2] >= (3, 9):
-                # upgrade pip & setuptools
-                virtualenv_options += ['--upgrade-deps']
-                venv_can_upgrade = True
 
             info(f'Creating a new Python environment in {idf_python_env_path}')
 
@@ -2642,7 +2639,8 @@ def action_install_python_env(args):  # type: ignore
                 with open(os.path.join(idf_python_env_path, VENV_VER_FILE), 'w') as f:
                     f.write(idf_version)
             except OSError as e:
-                warn(f'Error while generating the ESP-IDF version file in the Python environment: {e}')
+                warn(f'The following issue occurred while generating the ESP-IDF version file in the Python environment: {e}. '
+                     '(Diagnostic information. It can be ignored.)')
 
         else:
             # The embeddable Python for Windows doesn't have the built-in venv module
@@ -2653,17 +2651,19 @@ def action_install_python_env(args):  # type: ignore
         warn('Found PIP_USER="yes" in the environment. Disabling PIP_USER in this shell to install packages into a virtual environment.')
         env_copy['PIP_USER'] = 'no'
 
-    if not venv_can_upgrade:
-        info('Upgrading pip and setuptools...')
-        subprocess.check_call([virtualenv_python, '-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools'],
-                              stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
+    constraint_file = get_constraints(idf_version) if use_constraints else None
+
+    info('Upgrading pip and setuptools...')
+    run_args = [virtualenv_python, '-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools']
+    if constraint_file:
+        run_args += ['--constraint', constraint_file]
+    subprocess.check_call(run_args, stdout=sys.stdout, stderr=sys.stderr, env=env_copy)
 
     run_args = [virtualenv_python, '-m', 'pip', 'install', '--no-warn-script-location']
     requirements_file_list = get_requirements(args.features)
     for requirement_file in requirements_file_list:
         run_args += ['-r', requirement_file]
-    if use_constraints:
-        constraint_file = get_constraints(idf_version)
+    if constraint_file:
         run_args += ['--upgrade', '--constraint', constraint_file]
     if args.extra_wheels_dir:
         run_args += ['--find-links', args.extra_wheels_dir]
@@ -2677,7 +2677,7 @@ def action_install_python_env(args):  # type: ignore
         run_args += ['--find-links', wheels_dir]
 
     info('Installing Python packages')
-    if use_constraints:
+    if constraint_file:
         info(f' Constraint file: {constraint_file}')
     info(' Requirement files:')
     info(os.linesep.join(f'  - {path}' for path in requirements_file_list))
@@ -2757,8 +2757,8 @@ class ChecksumFileParser():
         <sha256sum-string> *<artifact-filename>
         ... (2 lines for every artifact) ...
     """
-    def __init__(self, tool_name: str, url: str) -> None:
-        self.tool_name = tool_name
+    def __init__(self, filename_prefix: str, url: str) -> None:
+        self.filename_prefix = filename_prefix
 
         sha256_file_tmp = os.path.join(g.idf_tools_path, 'tools', 'add-version.sha256.tmp')
         sha256_file = os.path.abspath(url)
@@ -2793,8 +2793,8 @@ class ChecksumFileParser():
                     raise SystemExit(1)
                 # crosstool-ng checksum file contains info about few tools
                 # e.g.: "xtensa-esp32-elf", "xtensa-esp32s2-elf"
-                # filter records for file by tool_name to avoid mismatch
-                if not hash_filename.startswith(self.tool_name):
+                # filter records for file by filename_prefix to avoid mismatch
+                if not hash_filename.startswith(self.filename_prefix):
                     continue
                 size = self.parseLine(r'^# \S*: (\d*) bytes', bytes_str)
                 sha256 = self.parseLine(r'^(\S*) ', hash_str)
@@ -2828,7 +2828,8 @@ def action_add_version(args: Any) -> None:
         version_obj = IDFToolVersion(version, version_status)
         tool_obj.versions[version] = version_obj
     url_prefix = args.url_prefix or f'https://{TODO_MESSAGE}/'
-    checksum_info: ChecksumFileParser = (ChecksumFileParser(tool_name, args.checksum_file)
+    filename_prefix = args.dist_filename_prefix if len(args.dist_filename_prefix) else tool_name
+    checksum_info: ChecksumFileParser = (ChecksumFileParser(filename_prefix, args.checksum_file)
                                          if args.checksum_file
                                          else ChecksumCalculator(args.artifact_file))  # type: ignore
     for file_size, file_sha256, file_name in checksum_info:
@@ -3147,7 +3148,7 @@ def main(argv: List[str]) -> None:
     install_python_env.add_argument('--extra-wheels-url', help='Additional URL with wheels', default=IDF_PIP_WHEELS_URL)
     install_python_env.add_argument('--no-index', help='Work offline without retrieving wheels index')
     install_python_env.add_argument('--features', default='core', help=('A comma separated list of desired features for installing. '
-                                                                        'It defaults to installing just the core funtionality.'))
+                                                                        'It defaults to installing just the core functionality.'))
     install_python_env.add_argument('--no-constraints', action='store_true', default=no_constraints_default,
                                     help=('Disable constraint settings. Use with care and only when you want to manage '
                                           'package versions by yourself. It can be set with the IDF_PYTHON_CHECK_CONSTRAINTS '
@@ -3160,6 +3161,9 @@ def main(argv: List[str]) -> None:
         add_version.add_argument('--version', help='Version identifier', required=True)
         add_version.add_argument('--url-prefix', help='String to prepend to file names to obtain download URLs')
         add_version.add_argument('--override', action='store_true', help='Override tool versions with new data')
+        add_version.add_argument('--dist-filename-prefix',
+                                 help='Prefix of distro archive name in checksum file. If skipped tool name is used.',
+                                 default='')
         add_version_files_group = add_version.add_mutually_exclusive_group(required=True)
         add_version_files_group.add_argument('--checksum-file', help='URL or path to local file with checksum/size for artifacts')
         add_version_files_group.add_argument('--artifact-file', help='File names of the download artifacts', nargs='*')

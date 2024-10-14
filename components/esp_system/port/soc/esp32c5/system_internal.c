@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include "sdkconfig.h"
+#include "esp_macros.h"
 #include "esp_system.h"
 #include "esp_private/system_internal.h"
 #include "esp_attr.h"
@@ -13,16 +14,18 @@
 #include "esp_rom_sys.h"
 #include "riscv/rv_utils.h"
 #include "esp_rom_uart.h"
+#include "soc/soc_caps.h"
 #include "soc/gpio_reg.h"
 #include "esp_cpu.h"
 #include "soc/rtc.h"
 #include "esp_private/rtc_clk.h"
 #include "soc/rtc_periph.h"
 #include "soc/uart_reg.h"
-#include "hal/clk_tree_ll.h"
 #include "hal/wdt_hal.h"
+#if SOC_MODEM_CLOCK_SUPPORTED
 #include "hal/modem_syscon_ll.h"
 #include "hal/modem_lpcon_ll.h"
+#endif
 #include "esp_private/cache_err_int.h"
 
 #include "esp32c5/rom/cache.h"
@@ -35,32 +38,27 @@ void IRAM_ATTR esp_system_reset_modules_on_exit(void)
     esp_rom_output_tx_wait_idle(0);
     esp_rom_output_tx_wait_idle(1);
 
+    // TODO: IDF-8845
+#if SOC_MODEM_CLOCK_SUPPORTED
     modem_syscon_ll_reset_all(&MODEM_SYSCON);
     modem_lpcon_ll_reset_all(&MODEM_LPCON);
-
-    // Set SPI Flash Freq to 40M
-    clk_ll_mspi_fast_set_src(MSPI_CLK_SRC_XTAL);
-    clk_ll_mspi_fast_set_divider(1);
-
+#endif
     // Set Peripheral clk rst
-    SET_PERI_REG_MASK(PCR_MSPI_CLK_CONF_REG, PCR_MSPI_AXI_RST_EN);
     SET_PERI_REG_MASK(PCR_MSPI_CONF_REG, PCR_MSPI_RST_EN);
     SET_PERI_REG_MASK(PCR_UART0_CONF_REG, PCR_UART0_RST_EN);
     SET_PERI_REG_MASK(PCR_UART1_CONF_REG, PCR_UART1_RST_EN);
     SET_PERI_REG_MASK(PCR_SYSTIMER_CONF_REG, PCR_SYSTIMER_RST_EN);
     SET_PERI_REG_MASK(PCR_GDMA_CONF_REG, PCR_GDMA_RST_EN);
-    SET_PERI_REG_MASK(PCR_SDIO_SLAVE_CONF_REG, PCR_SDIO_SLAVE_RST_EN);
     SET_PERI_REG_MASK(PCR_MODEM_CONF_REG, PCR_MODEM_RST_EN);
     SET_PERI_REG_MASK(PCR_PWM_CONF_REG, PCR_PWM_RST_EN);
 
     // Clear Peripheral clk rst
-    CLEAR_PERI_REG_MASK(PCR_MSPI_CLK_CONF_REG, PCR_MSPI_AXI_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_MSPI_CONF_REG, PCR_MSPI_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_UART0_CONF_REG, PCR_UART0_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_UART1_CONF_REG, PCR_UART1_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_SYSTIMER_CONF_REG, PCR_SYSTIMER_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_GDMA_CONF_REG, PCR_GDMA_RST_EN);
-    CLEAR_PERI_REG_MASK(PCR_SDIO_SLAVE_CONF_REG, PCR_SDIO_SLAVE_RST_EN);
+    // CLEAR_PERI_REG_MASK(PCR_SDIO_SLAVE_CONF_REG, PCR_SDIO_SLAVE_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_MODEM_CONF_REG, PCR_MODEM_RST_EN);
     CLEAR_PERI_REG_MASK(PCR_PWM_CONF_REG, PCR_PWM_RST_EN);
 }
@@ -98,7 +96,7 @@ void IRAM_ATTR esp_restart_noos(void)
     wdt_hal_write_protect_enable(&wdt1_context);
 
     // Disable cache
-    Cache_Disable_ICache();
+    Cache_Disable_Cache();
 
     // Reset wifi/bluetooth/ethernet/sdio (bb/mac)
     // Moved to module internal
@@ -116,7 +114,6 @@ void IRAM_ATTR esp_restart_noos(void)
 
     // Reset PRO CPU
     esp_rom_software_reset_cpu(0);
-    while (true) {
-        ;
-    }
+
+    ESP_INFINITE_LOOP();
 }

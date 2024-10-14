@@ -26,6 +26,8 @@
 #include "nimble/ble.h"
 #include "host/ble_sm.h"
 #define BLE_HID_SVC_UUID 0x1812          /* HID Service*/
+#else
+#include "esp_bt_device.h"
 #endif
 
 static const char *TAG = "ESP_HID_GAP";
@@ -339,38 +341,39 @@ static void handle_bt_device_result(struct disc_res_param *disc_res)
             uint8_t len = 0;
             uint8_t *data = 0;
 
-            data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_16BITS_UUID, &len);
-            if (data == NULL) {
-                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_16BITS_UUID, &len);
-            }
-            if (data && len == ESP_UUID_LEN_16) {
-                uuid.len = ESP_UUID_LEN_16;
-                uuid.uuid.uuid16 = data[0] + (data[1] << 8);
-                GAP_DBG_PRINTF(", "); print_uuid(&uuid);
-                continue;
-            }
+            do {
+                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_16BITS_UUID, &len);
+                if (data == NULL) {
+                    data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_16BITS_UUID, &len);
+                }
+                if (data && len == ESP_UUID_LEN_16) {
+                    uuid.len = ESP_UUID_LEN_16;
+                    uuid.uuid.uuid16 = data[0] + (data[1] << 8);
+                    GAP_DBG_PRINTF(", "); print_uuid(&uuid);
+                    break;
+                }
 
-            data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_32BITS_UUID, &len);
-            if (data == NULL) {
-                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_32BITS_UUID, &len);
-            }
-            if (data && len == ESP_UUID_LEN_32) {
-                uuid.len = len;
-                memcpy(&uuid.uuid.uuid32, data, sizeof(uint32_t));
-                GAP_DBG_PRINTF(", "); print_uuid(&uuid);
-                continue;
-            }
+                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_32BITS_UUID, &len);
+                if (data == NULL) {
+                    data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_32BITS_UUID, &len);
+                }
+                if (data && len == ESP_UUID_LEN_32) {
+                    uuid.len = len;
+                    memcpy(&uuid.uuid.uuid32, data, sizeof(uint32_t));
+                    GAP_DBG_PRINTF(", "); print_uuid(&uuid);
+                    break;
+                }
 
-            data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_128BITS_UUID, &len);
-            if (data == NULL) {
-                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_128BITS_UUID, &len);
-            }
-            if (data && len == ESP_UUID_LEN_128) {
-                uuid.len = len;
-                memcpy(uuid.uuid.uuid128, (uint8_t *)data, len);
-                GAP_DBG_PRINTF(", "); print_uuid(&uuid);
-                continue;
-            }
+                data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_CMPL_128BITS_UUID, &len);
+                if (data == NULL) {
+                    data = esp_bt_gap_resolve_eir_data((uint8_t *)prop->val, ESP_BT_EIR_TYPE_INCMPL_128BITS_UUID, &len);
+                }
+                if (data && len == ESP_UUID_LEN_128) {
+                    uuid.len = len;
+                    memcpy(uuid.uuid.uuid128, (uint8_t *)data, len);
+                    GAP_DBG_PRINTF(", "); print_uuid(&uuid);
+                }
+            } while (0);
 
             //try to find a name
             if (name == NULL) {
@@ -406,22 +409,34 @@ static void handle_ble_device_result(struct ble_scan_result_evt_param *scan_rst)
     char name[64] = {0};
 
     uint8_t uuid_len = 0;
-    uint8_t *uuid_d = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_16SRV_CMPL, &uuid_len);
+    uint8_t *uuid_d = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                               scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                               ESP_BLE_AD_TYPE_16SRV_CMPL,
+                                               &uuid_len);
     if (uuid_d != NULL && uuid_len) {
         uuid = uuid_d[0] + (uuid_d[1] << 8);
     }
 
     uint8_t appearance_len = 0;
-    uint8_t *appearance_d = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_APPEARANCE, &appearance_len);
+    uint8_t *appearance_d = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                                    scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                                    ESP_BLE_AD_TYPE_APPEARANCE,
+                                                    &appearance_len);
     if (appearance_d != NULL && appearance_len) {
         appearance = appearance_d[0] + (appearance_d[1] << 8);
     }
 
     uint8_t adv_name_len = 0;
-    uint8_t *adv_name = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_NAME_CMPL, &adv_name_len);
+    uint8_t *adv_name = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                                 scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                                 ESP_BLE_AD_TYPE_NAME_CMPL,
+                                                 &adv_name_len);
 
     if (adv_name == NULL) {
-        adv_name = esp_ble_resolve_adv_data(scan_rst->ble_adv, ESP_BLE_AD_TYPE_NAME_SHORT, &adv_name_len);
+        adv_name = esp_ble_resolve_adv_data_by_type(scan_rst->ble_adv,
+                                            scan_rst->adv_data_len + scan_rst->scan_rsp_len,
+                                            ESP_BLE_AD_TYPE_NAME_SHORT,
+                                            &adv_name_len);
     }
 
     if (adv_name != NULL && adv_name_len) {
@@ -706,7 +721,7 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
     //esp_ble_io_cap_t iocap = ESP_IO_CAP_OUT;//you have to enter the key on the host
     //esp_ble_io_cap_t iocap = ESP_IO_CAP_IN;//you have to enter the key on the device
     esp_ble_io_cap_t iocap = ESP_IO_CAP_IO;//you have to agree that key matches on both
-    //esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;//device is not capable of input or output, unsecure
+    //esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;//device is not capable of input or output, insecure
     uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
     uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
     uint8_t key_size = 16; //the key size should be 7~16 bytes
@@ -742,7 +757,7 @@ esp_err_t esp_hid_ble_gap_adv_init(uint16_t appearance, const char *device_name)
         return ret;
     }
 
-    if ((ret = esp_bt_dev_set_device_name(device_name)) != ESP_OK) {
+    if ((ret = esp_ble_gap_set_device_name(device_name)) != ESP_OK) {
         ESP_LOGE(TAG, "GAP set_device_name failed: %d", ret);
         return ret;
     }
@@ -861,7 +876,7 @@ nimble_hid_gap_event(struct ble_gap_event *event, void *arg)
             return 0;
         }
 
-        /* An advertisment report was received during GAP discovery. */
+        /* An advertisement report was received during GAP discovery. */
         return 0;
         break;
     case BLE_GAP_EVENT_DISC_COMPLETE:

@@ -18,7 +18,7 @@ from pytest_embedded_idf.dut import IdfDut
 # This file contains the test scripts for Thread:
 
 # Case 1: Thread network formation and attaching
-#         A Thread Border Router forms a Thread network, Thread devices attache to it, then test ping connection between them.
+#         A Thread Border Router forms a Thread network, Thread devices attach to it, then test ping connection between them.
 
 # Case 2: Bidirectional IPv6 connectivity
 #         Test IPv6 ping connection between Thread device and Linux Host (via Thread Border Router).
@@ -29,10 +29,10 @@ from pytest_embedded_idf.dut import IdfDut
 # Case 4: Multicast forwarding from Thread to Wi-Fi network
 #         Linux Host joins the multicast group, test group communication from Thread to Wi-Fi network.
 
-# Case 5: discover Serice published by Thread device
+# Case 5: discover Service published by Thread device
 #         Thread device publishes the service, Linux Host discovers the service on Wi-Fi network.
 
-# Case 6: discover Serice published by W-Fi device
+# Case 6: discover Service published by W-Fi device
 #         Linux Host device publishes the service on Wi-Fi network, Thread device discovers the service.
 
 # Case 7: ICMP communication via NAT64
@@ -43,6 +43,21 @@ from pytest_embedded_idf.dut import IdfDut
 
 # Case 9: TCP communication via NAT64
 #         Thread device (IPV6) send tcp message to the host device (IPV4) via NAT64.
+
+# Case 10: Sleepy device test
+#         Start a Thread sleepy device, wait it join the Thread network and check related flags.
+
+# Case 11: Basic startup Test of BR
+#         Test the basic startup and network formation of a Thread device.
+
+# Case 12: Curl a website via DNS and NAT64
+#         A border router joins a Wi-Fi network and forms a Thread network, a Thread devices attached to it and curl a website.
+
+# Case 13: Meshcop discovery of Border Router
+#         A border router joins a Wi-Fi network, forms a Thread network and publish a meshcop service. Linux Host device discover the mescop service.
+
+# Case 14: Curl a website over HTTPS via DNS and NAT64
+#         A border router joins a Wi-Fi network and forms a Thread network, a Thread devices attached to it and curl a https website.
 
 
 @pytest.fixture(scope='module', name='Init_avahi')
@@ -76,11 +91,16 @@ default_cli_ot_para = ocf.thread_parameter('router', '', '', '', False)
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
          'esp32c6|esp32h2|esp32s3'),
+        ('rcp_spi|cli|br_spi', 3,
+         f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
+         f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
+         f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
+         'esp32h2|esp32c6|esp32s3'),
     ],
     indirect=True,
 )
@@ -146,7 +166,7 @@ def formBasicWiFiThreadNetwork(br:IdfDut, cli:IdfDut) -> None:
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -195,7 +215,7 @@ def test_Bidirectional_IPv6_connectivity(Init_interface:bool, dut: Tuple[IdfDut,
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -245,7 +265,7 @@ def test_multicast_forwarding_A(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, 
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -296,7 +316,7 @@ def test_multicast_forwarding_B(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, 
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -352,7 +372,7 @@ def test_service_discovery_of_Thread_device(Init_interface:bool, Init_avahi:bool
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -415,7 +435,7 @@ def test_service_discovery_of_WiFi_device(Init_interface:bool, Init_avahi:bool, 
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -450,7 +470,7 @@ def test_ICMP_NAT64(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, IdfDut]) -> 
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -503,7 +523,7 @@ def test_UDP_NAT64(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, IdfDut]) -> N
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -560,11 +580,11 @@ def test_TCP_NAT64(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, IdfDut]) -> N
 @pytest.mark.openthread_sleep
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('cli_h2|sleepy_c6', 2,
+        ('cli|sleepy', 2,
          f'{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_sleepy_device/light_sleep")}',
          'esp32h2|esp32c6'),
-        ('cli_c6|sleepy_h2', 2,
+        ('cli|sleepy', 2,
          f'{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_sleepy_device/light_sleep")}',
          'esp32c6|esp32h2'),
@@ -612,7 +632,7 @@ def test_ot_sleepy_device(dut: Tuple[IdfDut, IdfDut]) -> None:
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|br', 2,
+        ('rcp_uart|br', 2,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
          'esp32c6|esp32s3'),
@@ -651,7 +671,7 @@ def test_basic_startup(dut: Tuple[IdfDut, IdfDut]) -> None:
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|cli_h2|br', 3,
+        ('rcp_uart|cli|br', 3,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
@@ -688,7 +708,7 @@ def test_NAT64_DNS(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, IdfDut]) -> N
 @pytest.mark.flaky(reruns=1, reruns_delay=1)
 @pytest.mark.parametrize(
     'config, count, app_path, target', [
-        ('rcp|br', 2,
+        ('rcp_uart|br', 2,
          f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
          f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
          'esp32c6|esp32s3'),
@@ -728,11 +748,47 @@ def test_br_meshcop(Init_interface:bool, Init_avahi:bool, dut: Tuple[IdfDut, Idf
             assert 'hostname = [esp-ot-br.local]' in str(output_str)
             assert ('address = [' + ipv4_address + ']') in str(output_str)
             assert 'dn=DefaultDomain' in str(output_str)
-            assert 'tv=1.3.0' in str(output_str)
+            assert 'tv=1.4.0' in str(output_str)
             assert ('nn=' + networkname) in str(output_str)
             assert 'mn=BorderRouter' in str(output_str)
             assert 'vn=OpenThread' in str(output_str)
             assert 'rv=1' in str(output_str)
     finally:
         ocf.execute_command(br, 'factoryreset')
+        time.sleep(3)
+
+
+# Case 14: Curl a website over HTTPS via DNS and NAT64
+@pytest.mark.supported_targets
+@pytest.mark.esp32h2
+@pytest.mark.esp32c6
+@pytest.mark.openthread_bbr
+@pytest.mark.flaky(reruns=1, reruns_delay=1)
+@pytest.mark.parametrize(
+    'config, count, app_path, target', [
+        ('rcp_uart|cli|br', 3,
+         f'{os.path.join(os.path.dirname(__file__), "ot_rcp")}'
+         f'|{os.path.join(os.path.dirname(__file__), "ot_cli")}'
+         f'|{os.path.join(os.path.dirname(__file__), "ot_br")}',
+         'esp32c6|esp32h2|esp32s3'),
+    ],
+    indirect=True,
+)
+def test_https_NAT64_DNS(Init_interface:bool, dut: Tuple[IdfDut, IdfDut, IdfDut]) -> None:
+    br = dut[2]
+    cli  = dut[1]
+    assert Init_interface
+    dut[0].serial.stop_redirect_thread()
+
+    formBasicWiFiThreadNetwork(br, cli)
+    try:
+        ocf.execute_command(cli, 'dns64server 8.8.8.8')
+        cli.expect('Done', timeout=5)
+        command = 'curl https://www.example.com/'
+        message = ocf.get_ouput_string(cli, command, 20)
+        assert '<html>' in str(message)
+        assert 'This domain is for use in illustrative examples in documents' in str(message)
+    finally:
+        ocf.execute_command(br, 'factoryreset')
+        ocf.execute_command(cli, 'factoryreset')
         time.sleep(3)

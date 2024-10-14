@@ -20,12 +20,7 @@
 #include "soc/io_mux_reg.h"
 #include "soc/lp_aon_reg.h"
 #include "esp_private/sleep_event.h"
-
-#ifdef BOOTLOADER_BUILD
-#include "hal/modem_lpcon_ll.h"
-#else
 #include "esp_private/esp_modem_clock.h"
-#endif
 
 static const char *TAG = "rtc_clk";
 
@@ -147,7 +142,7 @@ static void rtc_clk_bbpll_enable(void)
 static void rtc_clk_enable_i2c_ana_master_clock(bool enable)
 {
 #ifdef BOOTLOADER_BUILD
-    modem_lpcon_ll_enable_i2c_master_clock(&MODEM_LPCON, enable);
+    regi2c_ctrl_ll_master_enable_clock(enable);
 #else
     if (enable) {
         modem_clock_module_enable(PERIPH_ANA_I2C_MASTER_MODULE);
@@ -362,6 +357,7 @@ soc_xtal_freq_t rtc_clk_xtal_freq_get(void)
     uint32_t xtal_freq_mhz = clk_ll_xtal_load_freq_mhz();
     if (xtal_freq_mhz == 0) {
         ESP_HW_LOGW(TAG, "invalid RTC_XTAL_FREQ_REG value, assume 40MHz");
+        clk_ll_xtal_store_freq_mhz(SOC_XTAL_FREQ_40M);
         return SOC_XTAL_FREQ_40M;
     }
     return (soc_xtal_freq_t)xtal_freq_mhz;
@@ -421,25 +417,6 @@ bool rtc_dig_8m_enabled(void)
 {
     return clk_ll_rc_fast_digi_is_enabled();
 }
-
-// Workaround for bootloader not calibrated well issue.
-// Placed in IRAM because disabling BBPLL may influence the cache
-void rtc_clk_recalib_bbpll(void)
-{
-    rtc_cpu_freq_config_t old_config;
-    rtc_clk_cpu_freq_get_config(&old_config);
-
-    // There are two paths we arrive here: 1. CPU reset. 2. Other reset reasons.
-    // - For other reasons, the bootloader will set CPU source to BBPLL and enable it. But there are calibration issues.
-    //   Turn off the BBPLL and do calibration again to fix the issue.
-    // - For CPU reset, the CPU source will be set to XTAL, while the BBPLL is kept to meet USB Serial JTAG's
-    //   requirements. In this case, we don't touch BBPLL to avoid USJ disconnection.
-    if (old_config.source == SOC_CPU_CLK_SRC_PLL) {
-        rtc_clk_cpu_freq_set_xtal();
-        rtc_clk_cpu_freq_set_config(&old_config);
-    }
-}
-
 
 /* Name used in libphy.a:phy_chip_v7.o
  * TODO: update the library to use rtc_clk_xtal_freq_get

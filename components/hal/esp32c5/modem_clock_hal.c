@@ -1,10 +1,10 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The HAL layer for MODEM CLOCK (ESP32-C6 specific part)
+// The HAL layer for MODEM CLOCK (ESP32-C5 specific part)
 #include <stdbool.h>
 #include "soc/soc.h"
 #include "esp_attr.h"
@@ -59,7 +59,7 @@ void IRAM_ATTR modem_clock_hal_set_clock_domain_icg_bitmap(modem_clock_hal_conte
     }
 }
 
-uint32_t modem_clock_hal_get_clock_domain_icg_bitmap(modem_clock_hal_context_t *hal, modem_clock_domain_t domain)
+uint32_t IRAM_ATTR modem_clock_hal_get_clock_domain_icg_bitmap(modem_clock_hal_context_t *hal, modem_clock_domain_t domain)
 {
     HAL_ASSERT(domain < MODEM_CLOCK_DOMAIN_MAX);
     uint32_t bitmap = 0;
@@ -104,6 +104,9 @@ uint32_t modem_clock_hal_get_clock_domain_icg_bitmap(modem_clock_hal_context_t *
 void IRAM_ATTR modem_clock_hal_enable_modem_adc_common_fe_clock(modem_clock_hal_context_t *hal, bool enable)
 {
     if (enable) {
+        modem_syscon_ll_enable_fe_adc_clock(hal->syscon_dev, enable);
+        modem_syscon_ll_enable_fe_dac_clock(hal->syscon_dev, enable);
+        modem_syscon_ll_enable_fe_pwdet_clock(hal->syscon_dev, enable);
         modem_syscon_ll_enable_fe_apb_clock(hal->syscon_dev, enable);
         modem_syscon_ll_enable_fe_80m_clock(hal->syscon_dev, enable);
     }
@@ -112,7 +115,6 @@ void IRAM_ATTR modem_clock_hal_enable_modem_adc_common_fe_clock(modem_clock_hal_
 void IRAM_ATTR modem_clock_hal_enable_modem_private_fe_clock(modem_clock_hal_context_t *hal, bool enable)
 {
     if (enable) {
-        modem_syscon_ll_enable_fe_cal_160m_clock(hal->syscon_dev, enable);
         modem_syscon_ll_enable_fe_160m_clock(hal->syscon_dev, enable);
     }
 }

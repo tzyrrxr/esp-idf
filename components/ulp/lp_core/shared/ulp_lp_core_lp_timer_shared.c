@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "ulp_lp_core_lp_timer_shared.h"
+#include "soc/soc_caps.h"
+
+#if SOC_LP_TIMER_SUPPORTED
 #include "hal/lp_timer_ll.h"
 #include "hal/clk_tree_ll.h"
 #include "soc/rtc.h"
@@ -39,7 +42,15 @@ uint64_t ulp_lp_core_lp_timer_get_cycle_count(void)
 void ulp_lp_core_lp_timer_set_wakeup_time(uint64_t sleep_duration_us)
 {
     uint64_t cycle_cnt = ulp_lp_core_lp_timer_get_cycle_count();
-    uint64_t alarm_target = cycle_cnt + sleep_duration_us * (1 << RTC_CLK_CAL_FRACT) / clk_ll_rtc_slow_load_cal();
+    uint64_t alarm_target = cycle_cnt + ulp_lp_core_lp_timer_calculate_sleep_ticks(sleep_duration_us);
+
+    lp_timer_hal_set_alarm_target(alarm_target);
+}
+
+void ulp_lp_core_lp_timer_set_wakeup_ticks(uint64_t sleep_duration_ticks)
+{
+    uint64_t cycle_cnt = ulp_lp_core_lp_timer_get_cycle_count();
+    uint64_t alarm_target = cycle_cnt + sleep_duration_ticks;
 
     lp_timer_hal_set_alarm_target(alarm_target);
 }
@@ -49,3 +60,10 @@ void ulp_lp_core_lp_timer_disable(void)
     lp_timer_ll_set_target_enable(lp_timer_context.dev, TIMER_ID, false);
     lp_timer_ll_clear_lp_alarm_intr_status(lp_timer_context.dev);
 }
+
+uint64_t ulp_lp_core_lp_timer_calculate_sleep_ticks(uint64_t sleep_duration_us)
+{
+    return (sleep_duration_us * (1 << RTC_CLK_CAL_FRACT) / clk_ll_rtc_slow_load_cal());
+}
+
+#endif //SOC_LP_TIMER_SUPPORTED

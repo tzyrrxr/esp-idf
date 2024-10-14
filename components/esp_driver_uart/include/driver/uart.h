@@ -46,6 +46,11 @@ typedef struct {
         lp_uart_sclk_t lp_source_clk;       /*!< LP_UART source clock selection */
 #endif
     };
+    struct {
+        uint32_t backup_before_sleep: 1;    /*!< If set, the driver will backup/restore the HP UART registers before entering/after exiting sleep mode.
+                                                 By this approach, the system can power off HP UART's power domain.
+                                                 This can save power, but at the expense of more RAM being consumed */
+    } flags;                                /*!< Configuration flags */
 } uart_config_t;
 
 /**
@@ -828,7 +833,7 @@ esp_err_t uart_wait_tx_idle_polling(uart_port_t uart_num);
   * @brief Configure TX signal loop back to RX module, just for the test usage.
   *
   * @param uart_num UART number
-  * @param loop_back_en Set ture to enable the loop back function, else set it false.
+  * @param loop_back_en Set true to enable the loop back function, else set it false.
   *
   * * @return
   *      - ESP_OK on success

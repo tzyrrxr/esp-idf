@@ -19,7 +19,6 @@ const i2c_signal_conn_t i2c_periph_signal[SOC_I2C_NUM] = {
         .scl_out_sig = I2CEXT0_SCL_OUT_IDX,
         .scl_in_sig = I2CEXT0_SCL_IN_IDX,
         .irq = ETS_I2C_EXT0_INTR_SOURCE,
-        .module = PERIPH_I2C0_MODULE,
     },
     {
         .sda_out_sig = I2CEXT1_SDA_OUT_IDX,
@@ -27,7 +26,6 @@ const i2c_signal_conn_t i2c_periph_signal[SOC_I2C_NUM] = {
         .scl_out_sig = I2CEXT1_SCL_OUT_IDX,
         .scl_in_sig = I2CEXT1_SCL_IN_IDX,
         .irq = ETS_I2C_EXT1_INTR_SOURCE,
-        .module = PERIPH_I2C1_MODULE,
     },
 };
 
@@ -72,7 +70,7 @@ static const regdma_entries_config_t i2c1_regs_retention[] = {
            .owner = ENTRY(0) | ENTRY(2) }, \
 };
 
-const i2c_reg_ctx_link_t i2c_regs_retention[SOC_I2C_NUM] = {
+const i2c_reg_ctx_link_t i2c_regs_retention[SOC_HP_I2C_NUM] = {
     {i2c0_regs_retention, ARRAY_SIZE(i2c0_regs_retention)},
     {i2c1_regs_retention, ARRAY_SIZE(i2c1_regs_retention)},
 };

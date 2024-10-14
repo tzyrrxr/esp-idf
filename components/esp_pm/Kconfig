@@ -2,7 +2,7 @@ menu "Power Management"
     config PM_ENABLE
         bool "Support for power management"
         # SMP FreeRTOS currently does not support power management IDF-4997
-        depends on (!FREERTOS_SMP && !IDF_TARGET_ESP32P4) || __DOXYGEN__ # TODO: IDF-7527
+        depends on (!FREERTOS_SMP && SOC_PM_SUPPORTED) || __DOXYGEN__
         default n
         help
             If enabled, application is compiled with support for power management.
@@ -49,7 +49,7 @@ menu "Power Management"
 
     config PM_SLP_IRAM_OPT
         bool "Put lightsleep related codes in internal RAM"
-        depends on FREERTOS_USE_TICKLESS_IDLE
+        depends on SOC_LIGHT_SLEEP_SUPPORTED
         help
             If enabled, about 2.1KB of lightsleep related source code would be in IRAM and chip would sleep
             longer for 310us at 160MHz CPU frequency most each time.
@@ -75,7 +75,7 @@ menu "Power Management"
             you can call 'gpio_sleep_sel_dis' to disable this feature on those pins.
             You can also keep this feature on and call 'gpio_sleep_set_direction' and 'gpio_sleep_set_pull_mode'
             to have a different GPIO configuration at sleep.
-            Waring: If you want to enable this option on ESP32, you should enable `GPIO_ESP32_SUPPORT_SWITCH_SLP_PULL`
+            Warning: If you want to enable this option on ESP32, you should enable `GPIO_ESP32_SUPPORT_SWITCH_SLP_PULL`
             at first, otherwise you will not be able to switch pullup/pulldown mode.
 
     config PM_SLP_DEFAULT_PARAMS_OPT
@@ -84,7 +84,8 @@ menu "Power Management"
 
     config PM_CHECK_SLEEP_RETENTION_FRAME
         bool
-        depends on PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP
+        depends on (PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP || \
+            (SOC_CPU_IN_TOP_DOMAIN && PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP))
         default y if IDF_CI_BUILD
         default n
         help
@@ -141,7 +142,8 @@ menu "Power Management"
 
     config PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
         bool "Power down Digital Peripheral in light sleep (EXPERIMENTAL)"
-        depends on SOC_PAU_SUPPORTED
+        depends on SOC_PM_SUPPORT_TOP_PD && SOC_PAU_SUPPORTED
+        select PM_POWER_DOWN_CPU_IN_LIGHT_SLEEP if !SOC_CPU_IN_TOP_DOMAIN
         default n #TODO: enable by default if periph init/deinit management supported (WIFI-5252)
         help
             If enabled, digital peripherals will be powered down in light sleep, it will reduce sleep

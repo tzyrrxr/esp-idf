@@ -14,7 +14,8 @@
 #include "hal/mipi_dsi_brg_ll.h"
 #include "hal/mipi_dsi_phy_ll.h"
 
-#define MIPI_DSI_LL_NUM_BUS 1 // 1 MIPI DSI bus
+#define MIPI_DSI_LL_NUM_BUS        1 // support only 1 MIPI DSI bus
+#define MIPI_DSI_LL_MAX_DATA_LANES 2 // support up to 2 data lanes
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,7 +27,7 @@ extern "C" {
  * @param group_id Group ID
  * @param enable true to enable, false to disable
  */
-static inline void mipi_dsi_ll_enable_bus_clock(int group_id, bool enable)
+static inline void _mipi_dsi_ll_enable_bus_clock(int group_id, bool enable)
 {
     (void)group_id;
     HP_SYS_CLKRST.soc_clk_ctrl1.reg_dsi_sys_clk_en = enable;
@@ -34,7 +35,7 @@ static inline void mipi_dsi_ll_enable_bus_clock(int group_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define mipi_dsi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; mipi_dsi_ll_enable_bus_clock(__VA_ARGS__)
+#define mipi_dsi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _mipi_dsi_ll_enable_bus_clock(__VA_ARGS__)
 
 /**
  * @brief Reset the MIPI DSI module

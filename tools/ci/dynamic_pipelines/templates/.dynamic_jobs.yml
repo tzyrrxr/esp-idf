@@ -37,6 +37,7 @@
       --collect-app-info "list_job_${CI_JOB_NAME_SLUG}.txt"
       --modified-components ${MR_MODIFIED_COMPONENTS}
       --junitxml "build_summary_${CI_JOB_NAME_SLUG}.xml"
+    - run_cmd python tools/ci/artifacts_handler.py upload --type size_reports
 
 .dynamic_target_test_template:
   extends:
@@ -50,7 +51,7 @@
     PYTEST_NODES: ""
     TARGET_SELECTOR: ""
     ENV_MARKERS: ""
-    PYTEST_EXTRA_FLAGS: "--dev-passwd ${ETHERNET_TEST_PASSWORD} --dev-user ${ETHERNET_TEST_USER}"
+    PYTEST_EXTRA_FLAGS: "--dev-passwd ${ETHERNET_TEST_PASSWORD} --dev-user ${ETHERNET_TEST_USER} --capture=fd --verbosity=0"
   cache:
     # Usually do not need submodule-cache in target_test
     - key: pip-cache-${LATEST_GIT_TAG}
@@ -60,7 +61,7 @@
   artifacts:
     paths:
       - XUNIT_RESULT*.xml
-      - pytest_embedded_log/
+      - pytest-embedded/
 # Child pipeline reports won't be collected in the main one
 # https://gitlab.com/groups/gitlab-org/-/epics/8205
 #    reports:

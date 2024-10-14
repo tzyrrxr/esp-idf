@@ -10,7 +10,41 @@ GPIO 汇总
     :start-after: gpio-summary
     :end-before: ---
 
-GPIO 驱动提供了一个函数 :cpp:func:`gpio_dump_io_configuration` 用来输出指定管脚的实时配置状态，包括上下拉、输入输出使能、管脚映射等。例如，以下命令可用于输出 GPIO4，GPIO8 与 GPIO26 的配置状态：
+.. only:: SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
+
+    .. only:: not SOC_LP_PERIPHERALS_SUPPORTED
+
+        当 GPIO 连接到 RTC 低功耗和模拟子系统时，{IDF_TARGET_NAME} 芯片还单独支持 RTC GPIO。可在以下情况时使用这些管脚功能：
+
+        .. only:: SOC_LP_PERIPHERALS_SUPPORTED
+
+        当 GPIO 连接到 RTC 低功耗、模拟子系统、低功耗外设时，{IDF_TARGET_NAME} 芯片还单独支持 RTC GPIO。可在以下情况时使用这些管脚功能：
+
+    .. list::
+
+        - 处于 Deep-sleep 模式时
+        :SOC_ULP_FSM_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-FSM) <../../api-reference/system/ulp>` 运行时
+        :SOC_RISCV_COPROC_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-RISC-V) <../../api-reference/system/ulp-risc-v>` 运行时
+        :SOC_LP_CORE_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-LP-Core) <../../api-reference/system/ulp-lp-core>` 运行时
+        - 使用 ADC/DAC 等模拟功能时
+        :SOC_LP_PERIPHERALS_SUPPORTED: - 使用低功耗外设时，例如： LP_UART ， LP_I2C 等
+
+IO 管脚配置
+-----------
+
+IO 可以有两种使用方式：
+
+- 作为简单的 GPIO 输入读取引脚上的电平，或作为简单的 GPIO 输出以输出所需的电平。
+- 作为外设信号的输入/输出。
+
+IDF 外设驱动内部会处理需要应用到引脚上的必要 IO 配置，以便它们可以用作外设信号的输入或输出。这意味着用户通常自己只需负责将 IO 配置为简单的输入或输出。:cpp:func:`gpio_config` 是一个一体化的 API，可用于配置 I/O 模式、内部上拉/下拉电阻等管脚设置。
+
+在一些应用中，IO 管脚可以同时发挥双重作用。例如，输出 LEDC PWM 信号的 IO 也可以作为 GPIO 输入生成中断或 GPIO ETM 事件。这种双重用途的 IO 管脚在配置时需要特别注意。由于 :cpp:func:`gpio_config` 是一个会覆盖所有当前配置的 API ，因此必须先调用它将管脚模式设置为 :cpp:enumerator:`gpio_mode_t::GPIO_MODE_INPUT`，然后才能调用 LEDC 驱动 API 将输出信号连接到引脚上。作为替代方案，如果除了使管脚输入启用之外不需要其他额外配置，可以随时调用 :cpp:func:`gpio_input_enable` 以实现相同的目的。
+
+获取 IO 管脚实时配置状态
+------------------------
+
+GPIO 驱动提供了一个函数 :cpp:func:`gpio_dump_io_configuration` 用来输出指定管脚的实时配置状态，包括上下拉、输入输出使能、管脚映射等。例如，以下命令可用于输出 GPIO4，GPIO18 与 GPIO26 的配置状态：
 
 ::
 
@@ -49,27 +83,27 @@ GPIO 驱动提供了一个函数 :cpp:func:`gpio_dump_io_configuration` 用来�
 
     gpio_dump_all_io_configuration(stdout, SOC_GPIO_VALID_GPIO_MASK);
 
-当 IO 管脚是通过 GPIO 交换矩阵连接到内部外设信号，输出信息打印中的外设信号 ID 定义可以在 ``soc/gpio_sig_map.h`` 文件中查看。``**RESERVED**`` 字样则表示此 IO 被用于连接 FLASH 或 PSRAM，因此该引脚不应该被其他任何应用场景所征用并进行重新配置。
+如果 IO 管脚通过 GPIO 交换矩阵连接到内部外设信号，输出信息打印中的外设信号 ID 定义可以在 :component_file:`soc/{IDF_TARGET_PATH_NAME}/include/soc/gpio_sig_map.h` 头文件中查看。``**RESERVED**`` 字样则表示此 IO 用于连接 SPI flash 或 PSRAM，强烈建议不要重新配置这些管脚用于其他功能。
 
-.. only:: SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
+请不要依赖技术参考手册中记录的 GPIO 默认配置状态，因为特殊用途的 GPIO 可能会在 app_main 之前被引导程序或应用程序启动阶段的代码更改。
 
-    .. only:: not SOC_LP_PERIPHERALS_SUPPORTED
+.. only:: esp32c3 or esp32c6 or esp32h2 or esp32p4 or esp32s2 or esp32s3 or esp32c5 or esp32c61
 
-        当 GPIO 连接到 RTC 低功耗和模拟子系统时，{IDF_TARGET_NAME} 芯片还单独支持 RTC GPIO。可在以下情况时使用这些管脚功能：
+    配置 USB PHY 管脚 为普通 GPIO 管脚
+    ---------------------------------------
 
-    .. only:: SOC_LP_PERIPHERALS_SUPPORTED
+    要将 USB PHY 管脚配置为普通 GPIO 管脚，可使用函数 :cpp:func:`gpio_config`，请参考以下代码片段来进行配置。
 
-        当 GPIO 连接到 RTC 低功耗、模拟子系统、低功耗外设时，{IDF_TARGET_NAME} 芯片还单独支持 RTC GPIO。可在以下情况时使用这些管脚功能：
+    .. code-block:: c
 
-    .. list::
-
-        - 处于 Deep-sleep 模式时
-        :SOC_ULP_FSM_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-FSM) <../../api-reference/system/ulp>` 运行时
-        :SOC_RISCV_COPROC_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-RISC-V) <../../api-reference/system/ulp-risc-v>` 运行时
-        :SOC_LP_CORE_SUPPORTED: - :doc:`超低功耗协处理器 (ULP-LP-Core) <../../api-reference/system/ulp-lp-core>` 运行时
-        - 使用 ADC/DAC 等模拟功能时
-        :SOC_LP_PERIPHERALS_SUPPORTED: - 使用低功耗外设时，例如： LP_UART ， LP_I2C 等
-
+        gpio_config_t usb_phy_conf = {
+            .pin_bit_mask = (1ULL << USB_PHY_DP_PIN) | (1ULL << USB_PHY_DM_PIN),
+            .mode = GPIO_MODE_INPUT_OUTPUT,
+            .pull_up_en = 0,
+            .pull_down_en = 0,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&usb_phy_conf);
 
 .. only:: SOC_GPIO_SUPPORT_PIN_GLITCH_FILTER or SOC_GPIO_FLEX_GLITCH_FILTER_NUM
 
@@ -123,7 +157,11 @@ GPIO 驱动提供了一个函数 :cpp:func:`gpio_dump_io_configuration` 用来�
 应用示例
 -------------------
 
-* GPIO 输出和输入中断示例：:example:`peripherals/gpio/generic_gpio`。
+.. list::
+
+    * :example:`peripherals/gpio/generic_gpio` 演示了如何配置 GPIO 以生成脉冲，触发中断。
+    :esp32s2: * :example:`peripherals/gpio/matrix_keyboard` 演示了如何使用专用 GPIO API 驱动常见的矩阵键盘，包括控制一组 GPIO 的电平、触发边沿中断以及读取一组 GPIO 的电平。
+
 
 API 参考 - 普通 GPIO
 ---------------------------

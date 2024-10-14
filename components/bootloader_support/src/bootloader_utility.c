@@ -25,6 +25,7 @@
 #include "soc/rtc_periph.h"
 #include "soc/timer_periph.h"
 #include "hal/mmu_hal.h"
+#include "hal/mmu_ll.h"
 #include "hal/cache_types.h"
 #include "hal/cache_ll.h"
 #include "hal/cache_hal.h"
@@ -34,6 +35,9 @@
 #include "esp_app_desc.h"
 #include "esp_secure_boot.h"
 #include "esp_flash_encrypt.h"
+#ifndef BOOTLOADER_BUILD
+#include "spi_flash_mmap.h"
+#endif
 #include "esp_flash_partitions.h"
 #include "bootloader_flash_priv.h"
 #include "bootloader_random.h"
@@ -43,6 +47,7 @@
 #include "bootloader_sha.h"
 #include "bootloader_console.h"
 #include "bootloader_soc.h"
+#include "bootloader_memory_utils.h"
 #include "esp_efuse.h"
 #include "esp_fault.h"
 
@@ -456,15 +461,33 @@ static void set_actual_ota_seq(const bootloader_state_t *bs, int index)
 void bootloader_utility_load_boot_image_from_deep_sleep(void)
 {
     if (esp_rom_get_reset_reason(0) == RESET_REASON_CORE_DEEP_SLEEP) {
+#if SOC_RTC_FAST_MEM_SUPPORTED
         esp_partition_pos_t *partition = bootloader_common_get_rtc_retain_mem_partition();
-        if (partition != NULL) {
+        esp_image_metadata_t image_data;
+        if (partition != NULL && bootloader_load_image_no_verify(partition, &image_data) == ESP_OK) {
+            ESP_LOGI(TAG, "Fast booting app from partition at offset 0x%"PRIx32, partition->offset);
+            bootloader_common_update_rtc_retain_mem(NULL, true);
+            load_image(&image_data);
+        }
+#else // !SOC_RTC_FAST_MEM_SUPPORTED
+        bootloader_state_t bs = {0};
+        if (bootloader_utility_load_partition_table(&bs)) {
+            int index_of_last_loaded_app = FACTORY_INDEX;
+            esp_ota_select_entry_t otadata[2];
+            if (bs.ota_info.size && bootloader_common_read_otadata(&bs.ota_info, otadata) == ESP_OK) {
+                int active_otadata = bootloader_common_get_active_otadata(otadata);
+                if (active_otadata != -1) {
+                    index_of_last_loaded_app = (otadata[active_otadata].ota_seq - 1) % bs.app_count;
+                }
+            }
+            esp_partition_pos_t partition = index_to_partition(&bs, index_of_last_loaded_app);
             esp_image_metadata_t image_data;
-            if (bootloader_load_image_no_verify(partition, &image_data) == ESP_OK) {
-                ESP_LOGI(TAG, "Fast booting app from partition at offset 0x%"PRIx32, partition->offset);
-                bootloader_common_update_rtc_retain_mem(NULL, true);
+            if (partition.size && bootloader_load_image_no_verify(&partition, &image_data) == ESP_OK) {
+                ESP_LOGI(TAG, "Fast booting app from partition at offset 0x%"PRIx32, partition.offset);
                 load_image(&image_data);
             }
         }
+#endif // !SOC_RTC_FAST_MEM_SUPPORTED
         ESP_LOGE(TAG, "Fast booting is not successful");
         ESP_LOGI(TAG, "Try to load an app as usual with all validations");
     }
@@ -715,10 +738,20 @@ static void unpack_load_app(const esp_image_metadata_t *data)
     // Find DROM & IROM addresses, to configure MMU mappings
     for (int i = 0; i < data->image.segment_count; i++) {
         const esp_image_segment_header_t *header = &data->segments[i];
+        bool text_or_rodata = false;
+
         //`SOC_DROM_LOW` and `SOC_DROM_HIGH` are the same as `SOC_IROM_LOW` and `SOC_IROM_HIGH`, reasons are in above `note`
         if (header->load_addr >= SOC_DROM_LOW && header->load_addr < SOC_DROM_HIGH) {
+            text_or_rodata = true;
+        }
+#if SOC_MMU_PER_EXT_MEM_TARGET
+        if (header->load_addr >= SOC_EXTRAM_LOW && header->load_addr < SOC_EXTRAM_HIGH) {
+            text_or_rodata = true;
+        }
+#endif
+        if (text_or_rodata) {
             /**
-             * D/I are shared, but there should not be a third segment on flash
+             * D/I are shared, but there should not be a third segment on flash/psram
              */
             assert(rom_index < 2);
             rom_addr[rom_index] = data->segment_data[i];
@@ -785,6 +818,20 @@ static void unpack_load_app(const esp_image_metadata_t *data)
 }
 #endif  //#if SOC_MMU_DI_VADDR_SHARED
 
+//unused for esp32
+__attribute__((unused))
+static bool s_flash_seg_needs_map(uint32_t vaddr)
+{
+#if SOC_MMU_PER_EXT_MEM_TARGET
+    //For these chips, segments on PSRAM will be mapped in app
+    bool is_psram = esp_ptr_in_extram((void *)vaddr);
+    return !is_psram;
+#else
+    //For these chips, segments on Flash always need to be mapped
+    return true;
+#endif
+}
+
 static void set_cache_and_start_app(
     uint32_t drom_addr,
     uint32_t drom_load_addr,
@@ -822,8 +869,13 @@ static void set_cache_and_start_app(
     ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, drom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
 #else
     uint32_t actual_mapped_len = 0;
-    mmu_hal_map_region(0, MMU_TARGET_FLASH0, drom_load_addr_aligned, drom_addr_aligned, drom_size, &actual_mapped_len);
-    ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, actual_mapped_len);
+    if (s_flash_seg_needs_map(drom_load_addr_aligned)) {
+        mmu_hal_map_region(0, MMU_TARGET_FLASH0, drom_load_addr_aligned, drom_addr_aligned, drom_size, &actual_mapped_len);
+        ESP_EARLY_LOGV(TAG, "after mapping rodata, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, drom_load_addr_aligned, actual_mapped_len);
+    }
+    //we use the MMU_LL_END_DROM_ENTRY_ID mmu entry as a map page for app to find the boot partition
+    mmu_hal_map_region(0, MMU_TARGET_FLASH0, MMU_LL_END_DROM_ENTRY_VADDR, drom_addr_aligned, CONFIG_MMU_PAGE_SIZE, &actual_mapped_len);
+    ESP_EARLY_LOGV(TAG, "mapped one page of the rodata, from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", drom_addr_aligned, MMU_LL_END_DROM_ENTRY_VADDR, actual_mapped_len);
 #endif
 
     //-----------------------MAP IROM--------------------------
@@ -840,8 +892,10 @@ static void set_cache_and_start_app(
     ESP_LOGV(TAG, "rc=%d", rc);
     ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, irom_page_count * SPI_FLASH_MMU_PAGE_SIZE);
 #else
-    mmu_hal_map_region(0, MMU_TARGET_FLASH0, irom_load_addr_aligned, irom_addr_aligned, irom_size, &actual_mapped_len);
-    ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, actual_mapped_len);
+    if (s_flash_seg_needs_map(irom_load_addr_aligned)) {
+        mmu_hal_map_region(0, MMU_TARGET_FLASH0, irom_load_addr_aligned, irom_addr_aligned, irom_size, &actual_mapped_len);
+        ESP_EARLY_LOGV(TAG, "after mapping text, starting from paddr=0x%08" PRIx32 " and vaddr=0x%08" PRIx32 ", 0x%" PRIx32 " bytes are mapped", irom_addr_aligned, irom_load_addr_aligned, actual_mapped_len);
+    }
 #endif
 
     //----------------------Enable corresponding buses----------------

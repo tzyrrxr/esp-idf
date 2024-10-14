@@ -35,6 +35,7 @@ extern "C" {
 #define PMU_LP_DRVB_LIGHTSLEEP      0
 #define PMU_HP_XPD_LIGHTSLEEP       1
 
+#define PMU_DBG_ATTEN_LIGHTSLEEP_NODROP     0
 #define PMU_DBG_ATTEN_LIGHTSLEEP_DEFAULT    0
 #define PMU_HP_DBIAS_LIGHTSLEEP_0V6_DEFAULT 1
 #define PMU_LP_DBIAS_LIGHTSLEEP_0V7_DEFAULT 12
@@ -349,7 +350,7 @@ typedef struct {
     },                                                              \
     .lp_sys[PMU_MODE_LP_SLEEP] = {                                  \
         .analog = {                                                 \
-            .drv_b         = PMU_LP_DRVB_DEEPSLEEP,                 \
+            .drv_b         = PMU_LP_DRVB_LIGHTSLEEP,                \
             .pd_cur        = PMU_PD_CUR_SLEEP_DEFAULT,              \
             .bias_sleep    = PMU_BIASSLP_SLEEP_DEFAULT,             \
             .slp_xpd       = PMU_LP_SLP_XPD_SLEEP_DEFAULT,          \
@@ -364,8 +365,8 @@ typedef struct {
 #define PMU_SLEEP_ANALOG_DSLP_CONFIG_DEFAULT(pd_flags) {            \
     .hp_sys = {                                                     \
         .analog = {                                                 \
-            .pd_cur        = PMU_PD_CUR_SLEEP_ON,                   \
-            .bias_sleep    = PMU_BIASSLP_SLEEP_ON,                  \
+            .pd_cur        = PMU_PD_CUR_SLEEP_DEFAULT,              \
+            .bias_sleep    = PMU_BIASSLP_SLEEP_DEFAULT,             \
             .xpd           = PMU_HP_XPD_DEEPSLEEP,                  \
             .dbg_atten     = PMU_DBG_HP_DEEPSLEEP                   \
         }                                                           \
@@ -419,7 +420,7 @@ typedef struct {
 
 typedef struct pmu_sleep_machine_constant {
     struct {
-        uint16_t    min_slp_time_us;            /* Mininum sleep protection time (unit: microsecond) */
+        uint16_t    min_slp_time_us;            /* Minimum sleep protection time (unit: microsecond) */
         uint8_t     wakeup_wait_cycle;          /* Modem wakeup signal (WiFi MAC and BEACON wakeup) waits for the slow & fast clock domain synchronization and the wakeup signal triggers the PMU FSM switching wait cycle (unit: slow clock cycle) */
         uint8_t     reserved0;
         uint16_t    reserved1;
@@ -431,7 +432,7 @@ typedef struct pmu_sleep_machine_constant {
         uint16_t    power_up_wait_time_us;      /* (unit: microsecond) */
     } lp;
     struct {
-        uint16_t    min_slp_time_us;            /* Mininum sleep protection time (unit: microsecond) */
+        uint16_t    min_slp_time_us;            /* Minimum sleep protection time (unit: microsecond) */
         uint16_t    clock_domain_sync_time_us;  /* The Slow OSC clock domain synchronizes time with the Fast OSC domain, at least 4 slow clock cycles (unit: microsecond) */
         uint16_t    system_dfs_up_work_time_us; /* System DFS up scaling work time (unit: microsecond) */
         uint16_t    analog_wait_time_us;        /* HP LDO power up wait time (unit: microsecond) */

@@ -16,6 +16,7 @@
 #include "esp_check.h"
 #include "esp_pm.h"
 #include "soc/rtc.h"
+#include "soc/soc_caps.h"
 #include "driver/rtc_io.h"
 #include "sys/lock.h"
 #include "driver/gpio.h"
@@ -26,6 +27,7 @@
 #include "hal/adc_hal.h"
 #include "hal/adc_ll.h"
 #include "hal/adc_hal_common.h"
+#include "esp_private/esp_clk_tree_common.h"
 #include "esp_private/periph_ctrl.h"
 #include "driver/adc_types_legacy.h"
 #include "esp_clk_tree.h"
@@ -70,7 +72,7 @@ extern portMUX_TYPE rtc_spinlock; //TODO: Will be placed in the appropriate posi
 #define FSM_ENTER()             RTC_ENTER_CRITICAL()
 #define FSM_EXIT()              RTC_EXIT_CRITICAL()
 
-#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 //prevent ADC1 being used by I2S dma and other tasks at the same time.
 static _lock_t adc1_dma_lock;
 #define SARADC1_ACQUIRE() _lock_acquire( &adc1_dma_lock )
@@ -172,7 +174,7 @@ static void adc_rtc_chan_init(adc_unit_t adc_unit)
 esp_err_t adc_common_gpio_init(adc_unit_t adc_unit, adc_channel_t channel)
 {
     ESP_RETURN_ON_FALSE(channel < SOC_ADC_CHANNEL_NUM(adc_unit), ESP_ERR_INVALID_ARG, ADC_TAG, "invalid channel");
-
+#if ADC_LL_RTC_GPIO_SUPPORTED
     gpio_num_t gpio_num = 0;
     //If called with `ADC_UNIT_BOTH (ADC_UNIT_1 | ADC_UNIT_2)`, both if blocks will be run
     if (adc_unit == ADC_UNIT_1) {
@@ -188,7 +190,7 @@ esp_err_t adc_common_gpio_init(adc_unit_t adc_unit, adc_channel_t channel)
     ESP_RETURN_ON_ERROR(rtc_gpio_set_direction(gpio_num, RTC_GPIO_MODE_DISABLED), ADC_TAG, "rtc_gpio_set_direction fail");
     ESP_RETURN_ON_ERROR(rtc_gpio_pulldown_dis(gpio_num), ADC_TAG, "rtc_gpio_pulldown_dis fail");
     ESP_RETURN_ON_ERROR(rtc_gpio_pullup_dis(gpio_num), ADC_TAG, "rtc_gpio_pullup_dis fail");
-
+#endif
     return ESP_OK;
 }
 
@@ -571,7 +573,7 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 #endif
     adc_oneshot_ll_set_output_bits(ADC_UNIT_2, bitwidth);
 
-#if CONFIG_IDF_TARGET_ESP32
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32P4
     adc_ll_set_controller(ADC_UNIT_2, ADC_LL_CTRL_RTC);// set controller
 #else
     adc_ll_set_controller(ADC_UNIT_2, ADC_LL_CTRL_ARB);// set controller
@@ -775,6 +777,7 @@ int adc1_get_raw(adc1_channel_t channel)
 
     adc_apb_periph_claim();
     sar_periph_ctrl_adc_oneshot_power_acquire();
+    esp_clk_tree_enable_src((soc_module_clk_t)ADC_DIGI_CLK_SRC_DEFAULT, true);
     adc_ll_digi_clk_sel(ADC_DIGI_CLK_SRC_DEFAULT);
 
     adc_atten_t atten = s_atten1_single[channel];
@@ -832,6 +835,7 @@ esp_err_t adc2_get_raw(adc2_channel_t channel, adc_bits_width_t width_bit, int *
 
     adc_apb_periph_claim();
     sar_periph_ctrl_adc_oneshot_power_acquire();
+    esp_clk_tree_enable_src((soc_module_clk_t)ADC_DIGI_CLK_SRC_DEFAULT, true);
     adc_ll_digi_clk_sel(ADC_DIGI_CLK_SRC_DEFAULT);
 
     adc_arbiter_t config = ADC_ARBITER_CONFIG_DEFAULT();
@@ -879,7 +883,7 @@ static void adc_hal_onetime_start(adc_unit_t adc_n, uint32_t clk_src_freq_hz)
     esp_rom_delay_us(delay);
     adc_oneshot_ll_start(true);
 
-    //No need to delay here. Becuase if the start signal is not seen, there won't be a done intr.
+    //No need to delay here. Because if the start signal is not seen, there won't be a done intr.
 #else
     (void)clk_src_freq_hz;
     adc_oneshot_ll_start(adc_n);

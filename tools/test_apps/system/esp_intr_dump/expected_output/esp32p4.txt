@@ -1,10 +1,10 @@
 CPU 0 interrupt status:
  Int  Level  Type   Status
-  0     1    Level  Used: CPU_INT_FROM_CPU_0
-  1     1    Level  Used: SYSTIMER_TARGET0
-  2     1    Level  Used: TG0_WDT_LEVEL
-  3     1    Level  Used: UART0
-  4     *      *    Free
+  0     1    Level  Used: LP_ANAPERI
+  1     1    Level  Used: CPU_INT_FROM_CPU_0
+  2     1    Level  Used: SYSTIMER_TARGET0
+  3     1    Level  Used: TG0_WDT_LEVEL
+  4     1    Level  Used: UART0
   5     *      *    Free
   6     *      *    Reserved
   7     *      *    Free
@@ -24,11 +24,11 @@ CPU 0 interrupt status:
  21     *      *    Free
  22     *      *    Free
  23     *      *    Free
- 24     *      *    Free
- 25     *      *    Free
+ 24     *      *    Reserved
+ 25     *      *    Reserved
  26     *      *    Free
- 27     *      *    Free
- 28     *      *    Free
+ 27     *      *    Reserved
+ 28     *      *    Reserved
  29     *      *    Free
  30     *      *    Free
  31     *      *    Free
@@ -58,12 +58,12 @@ CPU 1 interrupt status:
  21     *      *    Free
  22     *      *    Free
  23     *      *    Free
- 24     *      *    Free
- 25     *      *    Free
+ 24     *      *    Reserved
+ 25     *      *    Reserved
  26     *      *    Free
- 27     *      *    Free
- 28     *      *    Free
+ 27     *      *    Reserved
+ 28     *      *    Reserved
  29     *      *    Free
  30     *      *    Free
  31     *      *    Free
-Interrupts available for general use: 56
+Interrupts available for general use: 47

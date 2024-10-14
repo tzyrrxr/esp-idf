@@ -12,7 +12,6 @@ idf_component_register(SRCS "cxx_exception_stubs.cpp"
 
 if(NOT CONFIG_CXX_EXCEPTIONS)
     set(WRAP_FUNCTIONS
-        _Unwind_SetEnableExceptionFdeSorting
         __register_frame_info_bases
         __register_frame_info
         __register_frame
@@ -40,7 +39,9 @@ if(NOT CONFIG_CXX_EXCEPTIONS)
         _Unwind_Resume_or_Rethrow
         _Unwind_Backtrace
         __cxa_call_unexpected
-        __gxx_personality_v0)
+        __gxx_personality_v0
+        __cxa_throw
+        __cxa_allocate_exception)
 
     foreach(wrap ${WRAP_FUNCTIONS})
         target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=${wrap}")

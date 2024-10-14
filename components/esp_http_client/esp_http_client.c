@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -34,6 +34,11 @@ static const char *TAG = "HTTP_CLIENT";
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_ANY == (int)ESP_TLS_VER_ANY, "Enum mismatch in esp_http_client and esp-tls");
 ESP_STATIC_ASSERT((int)ESP_HTTP_CLIENT_TLS_VER_MAX <= (int)ESP_TLS_VER_TLS_MAX, "HTTP client supported TLS is not supported in esp-tls");
 
+#if CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT == -1
+#define ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT portMAX_DELAY
+#else
+#define ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT pdMS_TO_TICKS(CONFIG_ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT)
+#endif
 /**
  * HTTP Buffer
  */
@@ -179,7 +184,8 @@ static const char *HTTP_METHOD_MAPPING[] = {
     "UNLOCK",
     "PROPFIND",
     "PROPPATCH",
-    "MKCOL"
+    "MKCOL",
+    "REPORT"
 };
 
 static esp_err_t esp_http_client_request_send(esp_http_client_handle_t client, int write_len);
@@ -202,7 +208,7 @@ static esp_err_t http_dispatch_event(esp_http_client_t *client, esp_http_client_
 
 static void http_dispatch_event_to_event_loop(int32_t event_id, const void* event_data, size_t event_data_size)
 {
-    esp_err_t err = esp_event_post(ESP_HTTP_CLIENT_EVENT, event_id, event_data, event_data_size, portMAX_DELAY);
+    esp_err_t err = esp_event_post(ESP_HTTP_CLIENT_EVENT, event_id, event_data, event_data_size, ESP_HTTP_CLIENT_EVENT_POST_TIMEOUT);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to post http_client event: %"PRId32", error: %s", event_id, esp_err_to_name(err));
     }
@@ -248,6 +254,7 @@ static int http_on_header_event(esp_http_client_handle_t client)
 static int http_on_header_field(http_parser *parser, const char *at, size_t length)
 {
     esp_http_client_t *client = parser->data;
+    http_on_header_event(client);
     http_utils_append_string(&client->current_header_key, at, length);
 
     return 0;
@@ -268,7 +275,6 @@ static int http_on_header_value(http_parser *parser, const char *at, size_t leng
         http_utils_append_string(&client->auth_header, at, length);
     }
     http_utils_append_string(&client->current_header_value, at, length);
-    http_on_header_event(client);
     return 0;
 }
 
@@ -350,17 +356,38 @@ static int http_on_chunk_header(http_parser *parser)
 
 esp_err_t esp_http_client_set_header(esp_http_client_handle_t client, const char *key, const char *value)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL || value == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_set(client->request->headers, key, value);
 }
 
 esp_err_t esp_http_client_get_header(esp_http_client_handle_t client, const char *key, char **value)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_get(client->request->headers, key, value);
 }
 
 esp_err_t esp_http_client_delete_header(esp_http_client_handle_t client, const char *key)
 {
+    if (client == NULL || client->request == NULL || client->request->headers == NULL || key == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     return http_header_delete(client->request->headers, key);
+}
+
+esp_err_t esp_http_client_delete_all_headers(esp_http_client_handle_t client)
+{
+    if (client == NULL || client->request == NULL || client->request->headers == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return http_header_clean(client->request->headers);
 }
 
 esp_err_t esp_http_client_get_username(esp_http_client_handle_t client, char **value)
@@ -657,9 +684,11 @@ static bool init_common_tcp_transport(esp_http_client_handle_t client, const esp
     }
 
     if (config->if_name) {
-        client->if_name = calloc(1, sizeof(struct ifreq));
-        ESP_RETURN_ON_FALSE(client->if_name, false, TAG, "Memory exhausted");
-        memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
+        if (client->if_name == NULL) {
+            client->if_name = calloc(1, sizeof(struct ifreq));
+            ESP_RETURN_ON_FALSE(client->if_name, false, TAG, "Memory exhausted");
+            memcpy(client->if_name, config->if_name, sizeof(struct ifreq));
+        }
         esp_transport_tcp_set_interface_name(transport, client->if_name);
     }
     return true;
@@ -957,9 +986,19 @@ esp_err_t esp_http_client_set_redirection(esp_http_client_handle_t client)
     return err;
 }
 
+esp_err_t esp_http_client_reset_redirect_counter(esp_http_client_handle_t client)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    client->redirect_counter = 0;
+    return ESP_OK;
+}
+
 static esp_err_t esp_http_check_response(esp_http_client_handle_t client)
 {
     if (client->response->status_code >= HttpStatus_Ok && client->response->status_code < HttpStatus_MultipleChoices) {
+        client->redirect_counter = 0;
         return ESP_OK;
     }
     if (client->redirect_counter >= client->max_redirection_count) {
@@ -1475,7 +1514,12 @@ static esp_err_t esp_http_client_connect(esp_http_client_handle_t client)
 static int http_client_prepare_first_line(esp_http_client_handle_t client, int write_len)
 {
     if (write_len >= 0) {
-        http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
+        const bool length_required = (client->connection_info.method != HTTP_METHOD_GET &&
+                                      client->connection_info.method != HTTP_METHOD_HEAD &&
+                                      client->connection_info.method != HTTP_METHOD_DELETE);
+        if (write_len != 0 || length_required) {
+            http_header_set_format(client->request->headers, "Content-Length", "%d", write_len);
+        }
     } else {
         esp_http_client_set_header(client, "Transfer-Encoding", "chunked");
     }

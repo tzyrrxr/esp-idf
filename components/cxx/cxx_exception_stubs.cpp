@@ -35,11 +35,6 @@ static T abort_return()
 }
 
 // unwind-dw2-fde.o
-extern "C" void __wrap__Unwind_SetEnableExceptionFdeSorting(unsigned char enable)
-{
-    abort();
-}
-
 extern "C" void __wrap___register_frame_info_bases(const void *begin, struct object *ob, void *tbase, void *dbase)
 {
     abort();
@@ -181,6 +176,18 @@ extern "C" _Unwind_Reason_Code __wrap___gxx_personality_v0(int version,
                                                            struct _Unwind_Context *context)
 {
     return abort_return<_Unwind_Reason_Code>();
+}
+
+// Reduces binary size since the linker will drop some code due to --gc-sections.
+extern "C" void __wrap___cxa_allocate_exception(void)
+{
+    abort();
+}
+
+// Reduces binary size since the linker will drop some code due to --gc-sections.
+extern "C" void __wrap___cxa_throw(void)
+{
+    abort();
 }
 
 #endif // CONFIG_COMPILER_CXX_EXCEPTIONS

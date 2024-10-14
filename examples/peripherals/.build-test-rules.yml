@@ -10,11 +10,19 @@
 examples/peripherals/adc/continuous_read:
   disable:
     - if: SOC_ADC_DMA_SUPPORTED != 1
+  disable_test:
+    - if: IDF_TARGET == "esp32p4"
+      temporary: true
+      reason: lack of runners, TODO IDF-9573
   <<: *adc_dependencies
 
 examples/peripherals/adc/oneshot_read:
   disable:
     - if: SOC_ADC_SUPPORTED != 1
+  disable_test:
+    - if: IDF_TARGET == "esp32p4"
+      temporary: true
+      reason: lack of runner, TODO IDF-9573
   <<: *adc_dependencies
 
 examples/peripherals/analog_comparator:
@@ -23,6 +31,13 @@ examples/peripherals/analog_comparator:
   depends_components:
     - esp_driver_gpio
     - esp_driver_ana_cmpr
+
+examples/peripherals/camera/camera_dsi:
+  disable:
+    - if: SOC_MIPI_CSI_SUPPORTED != 1 or SOC_MIPI_DSI_SUPPORTED != 1
+  depends_components:
+    - esp_lcd
+    - esp_driver_cam
 
 examples/peripherals/dac:
   disable:
@@ -112,9 +127,25 @@ examples/peripherals/i2s/i2s_recorder:
     - esp_driver_spi
     - esp_driver_i2s
 
+examples/peripherals/isp/multi_pipelines:
+  disable:
+    - if: SOC_MIPI_CSI_SUPPORTED != 1
+    - if: SOC_MIPI_DSI_SUPPORTED != 1
+    - if: SOC_ISP_SUPPORTED != 1
+  depends_components:
+    - esp_driver_isp
+    - esp_driver_cam
+    - esp_lcd
+
 examples/peripherals/jpeg/jpeg_decode:
   disable:
     - if: SOC_JPEG_CODEC_SUPPORTED != 1
+  depends_components:
+    - esp_driver_jpeg
+
+examples/peripherals/jpeg/jpeg_encode:
+  disable:
+    - if: SOC_JPEG_ENCODE_SUPPORTED != 1
   depends_components:
     - esp_driver_jpeg
 
@@ -227,18 +258,12 @@ examples/peripherals/mcpwm/mcpwm_sync:
 examples/peripherals/parlio:
   disable:
     - if: SOC_PARLIO_SUPPORTED != 1
-  disable_test:
-    - if: IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: lack of runner
   depends_components:
     - esp_driver_parlio
 
 examples/peripherals/parlio/parlio_rx:
   disable:
-    - if: SOC_PARLIO_SUPPORTED != 1 or IDF_TARGET == "esp32p4"
-      temporary: true
-      reason: not support esp32p4 yet (IDF-7471)
+    - if: SOC_PARLIO_SUPPORTED != 1
   depends_components:
     - esp_driver_parlio
 
@@ -258,6 +283,13 @@ examples/peripherals/pcnt:
   depends_components:
     - esp_driver_pcnt
 
+examples/peripherals/ppa/ppa_dsi:
+  disable:
+    - if: SOC_PPA_SUPPORTED != 1 or SOC_MIPI_DSI_SUPPORTED != 1
+  depends_components:
+    - esp_driver_ppa
+    - esp_lcd
+
 examples/peripherals/rmt:
   disable:
     - if: SOC_RMT_SUPPORTED != 1
@@ -276,12 +308,14 @@ examples/peripherals/rmt/ir_nec_transceiver:
 
 examples/peripherals/rmt/musical_buzzer:
   disable:
+    - if: SOC_RMT_SUPPORTED != 1
     - if: SOC_RMT_SUPPORT_TX_LOOP_COUNT != 1
   depends_components:
     - esp_driver_rmt
 
 examples/peripherals/rmt/stepper_motor:
   disable:
+    - if: SOC_RMT_SUPPORTED != 1
     - if: SOC_RMT_SUPPORT_TX_LOOP_AUTO_STOP != 1
   depends_components:
     - esp_driver_rmt
@@ -367,15 +401,15 @@ examples/peripherals/timer_group/gptimer:
 
 examples/peripherals/timer_group/gptimer_capture_hc_sr04:
   disable:
-    - if: SOC_TIMER_SUPPORT_ETM != 1
+    - if: SOC_GPTIMER_SUPPORTED != 1 or SOC_TIMER_SUPPORT_ETM != 1
   depends_components:
     - esp_driver_gptimer
 
-examples/peripherals/timer_group/legacy_driver:
+examples/peripherals/timer_group/wiegand_interface:
   disable:
-    - if: SOC_GPTIMER_SUPPORTED != 1
+    - if: SOC_GPTIMER_SUPPORTED != 1 or SOC_TIMER_GROUP_TOTAL_TIMERS < 2
   depends_components:
-    - driver # legacy driver is still located in the "driver" component
+    - esp_driver_gptimer
 
 examples/peripherals/touch_sensor:
   disable:
@@ -393,6 +427,16 @@ examples/peripherals/touch_sensor/touch_sensor_v1:
 examples/peripherals/touch_sensor/touch_sensor_v2:
   disable:
     - if: SOC_TOUCH_SENSOR_VERSION != 2
+
+examples/peripherals/touch_sensor/touch_sensor_v3:
+  disable:
+    - if: SOC_TOUCH_SENSOR_VERSION != 3
+  disable_test:
+    - if: IDF_TARGET == "esp32p4"
+      temporary: true
+      reason: the runners do not support the pins for touch sensor
+  depends_components:
+    - esp_driver_touch_sens
 
 examples/peripherals/twai/twai_alert_and_recovery:
   disable:
@@ -426,7 +470,7 @@ examples/peripherals/usb/device:
   disable:
     - if: SOC_USB_OTG_SUPPORTED != 1
   disable_test:
-    - if: IDF_TARGET not in ["esp32s2", "esp32s3"]
+    - if: IDF_TARGET not in ["esp32s2", "esp32p4"]
       temporary: true
       reason: lack of runners with usb_device tag
   depends_components:
@@ -439,7 +483,7 @@ examples/peripherals/usb/device/tusb_ncm:
   disable:
     - if: SOC_USB_OTG_SUPPORTED != 1 or SOC_WIFI_SUPPORTED != 1
   disable_test:
-    - if: IDF_TARGET not in ["esp32s2", "esp32s3"]
+    - if: IDF_TARGET not in ["esp32s2"]
       temporary: true
       reason: lack of runners with usb_device tag
   depends_components:

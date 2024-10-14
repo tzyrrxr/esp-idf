@@ -42,6 +42,7 @@ extern "C" {
 #define SPI_LL_CPU_MAX_BIT_LEN    (16 * 32)    //Fifo len: 16 words
 #define SPI_LL_SUPPORT_CLK_SRC_PRE_DIV      1  //clock source have divider before peripheral
 #define SPI_LL_CLK_SRC_PRE_DIV_MAX          512//div1(8bit) * div2(8bit but set const 2)
+#define SPI_LL_MOSI_FREE_LEVEL    1            //Default level after bus initialized
 
 /**
  * The data structure holding calculated clock configuration. Since the
@@ -97,7 +98,7 @@ typedef enum {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
+static inline void _spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enable) {
     switch (host_id)
     {
     case SPI2_HOST:
@@ -114,7 +115,7 @@ static inline void spi_ll_enable_bus_clock(spi_host_device_t host_id, bool enabl
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_enable_bus_clock(__VA_ARGS__)
+#define spi_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _spi_ll_enable_bus_clock(__VA_ARGS__)
 
 /**
  * Reset whole peripheral register to init value defined by HW design
@@ -146,7 +147,7 @@ static inline void spi_ll_reset_register(spi_host_device_t host_id) {
  * @param host_id   Peripheral index number, see `spi_host_device_t`
  * @param enable    Enable/Disable
  */
-static inline void spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
+static inline void _spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
 {
     switch (host_id)
     {
@@ -164,7 +165,7 @@ static inline void spi_ll_enable_clock(spi_host_device_t host_id, bool enable)
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define spi_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; spi_ll_enable_clock(__VA_ARGS__)
+#define spi_ll_enable_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _spi_ll_enable_clock(__VA_ARGS__)
 
 /**
  * Select SPI peripheral clock source (master).
@@ -323,7 +324,7 @@ static inline void spi_ll_apply_config(spi_dev_t *hw)
 
 /**
  * Trigger start of user-defined transaction.
- * The synchronization between two clock domains is required in ESP32-S3
+ * The synchronization between two clock domains is required in ESP32P4
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -358,7 +359,7 @@ static inline void spi_ll_slave_reset(spi_dev_t *hw)
 /**
  * Reset SPI CPU TX FIFO
  *
- * On P4, this function is not seperated
+ * On P4, this function is not separated
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -371,7 +372,7 @@ static inline void spi_ll_cpu_tx_fifo_reset(spi_dev_t *hw)
 /**
  * Reset SPI CPU RX FIFO
  *
- * On P4, this function is not seperated
+ * On P4, this function is not separated
  *
  * @param hw Beginning address of the peripheral registers.
  */
@@ -760,7 +761,7 @@ static inline void spi_ll_master_set_clock_by_reg(spi_dev_t *hw, const spi_ll_cl
  * Get the frequency of given dividers. Don't use in app.
  *
  * @param fapb APB clock of the system.
- * @param pre  Pre devider.
+ * @param pre  Pre divider.
  * @param n    Main divider.
  *
  * @return     Frequency of given dividers.
@@ -771,10 +772,10 @@ static inline int spi_ll_freq_for_pre_n(int fapb, int pre, int n)
 }
 
 /**
- * Calculate the nearest frequency avaliable for master.
+ * Calculate the nearest frequency available for master.
  *
  * @param fapb       APB clock of the system.
- * @param hz         Frequncy desired.
+ * @param hz         Frequency desired.
  * @param duty_cycle Duty cycle desired.
  * @param out_reg    Output address to store the calculated clock configurations for the return frequency.
  *
@@ -854,7 +855,7 @@ static inline int spi_ll_master_cal_clock(int fapb, int hz, int duty_cycle, spi_
  *
  * @param hw         Beginning address of the peripheral registers.
  * @param fapb       APB clock of the system.
- * @param hz         Frequncy desired.
+ * @param hz         Frequency desired.
  * @param duty_cycle Duty cycle desired.
  *
  * @return           Actual frequency that is used.
@@ -878,6 +879,16 @@ static inline int spi_ll_master_set_clock(spi_dev_t *hw, int fapb, int hz, int d
  */
 static inline void spi_ll_set_mosi_delay(spi_dev_t *hw, int delay_mode, int delay_num)
 {
+}
+
+/**
+ * Determine and unify the default level of mosi line when bus free
+ *
+ * @param hw Beginning address of the peripheral registers.
+ */
+static inline void spi_ll_set_mosi_free_level(spi_dev_t *hw, bool level)
+{
+    hw->ctrl.d_pol = level;     //set default level for MOSI only on IDLE state
 }
 
 /**
@@ -908,7 +919,7 @@ static inline void spi_ll_master_set_cs_hold(spi_dev_t *hw, int hold)
 /**
  * Set the delay of SPI clocks before the first SPI clock after the CS active edge.
  *
- * Note ESP32 doesn't support to use this feature when command/address phases
+ * Note ESP32P4 doesn't support to use this feature when command/address phases
  * are used in full duplex mode.
  *
  * @param hw    Beginning address of the peripheral registers.

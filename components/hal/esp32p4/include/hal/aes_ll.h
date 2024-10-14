@@ -31,14 +31,14 @@ typedef enum {
  *
  * @param enable true to enable the module, false to disable the module
  */
-static inline void aes_ll_enable_bus_clock(bool enable)
+static inline void _aes_ll_enable_bus_clock(bool enable)
 {
     HP_SYS_CLKRST.peri_clk_ctrl25.reg_crypto_aes_clk_en = enable;
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define aes_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; aes_ll_enable_bus_clock(__VA_ARGS__)
+#define aes_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _aes_ll_enable_bus_clock(__VA_ARGS__)
 
 /**
  * @brief Reset the AES peripheral module
@@ -48,7 +48,8 @@ static inline void aes_ll_reset_register(void)
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_aes = 1;
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_aes = 0;
 
-    // Clear reset on digital signature, otherwise AES is held in reset
+    // Clear reset on digital signature and parent crypto, otherwise AES is held in reset
+    HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_crypto = 0;
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_ds = 0;
 }
 
@@ -249,6 +250,92 @@ static inline void aes_ll_interrupt_clear(void)
     REG_WRITE(AES_INT_CLEAR_REG, 1);
 }
 
+/**
+ * @brief Continue a previous started transform
+ *
+ * @note Only used when doing GCM
+ */
+static inline void aes_ll_cont_transform(void)
+{
+    REG_WRITE(AES_CONTINUE_REG, 1);
+}
+
+/**
+ * @brief Reads the AES-GCM hash sub-key H
+ *
+ * @param gcm_hash hash value
+ */
+static inline void aes_ll_gcm_read_hash(uint8_t *gcm_hash)
+{
+    const size_t REG_WIDTH = sizeof(uint32_t);
+    uint32_t hash_word;
+
+    for (size_t i = 0; i < AES_BLOCK_WORDS; i++) {
+        hash_word = REG_READ(AES_H_MEM + (i * REG_WIDTH));
+        /* Memcpy to avoid potential unaligned access */
+        memcpy(gcm_hash + i * 4, &hash_word, sizeof(hash_word));
+    }
+}
+
+/**
+ * @brief Sets the number of Additional Authenticated Data (AAD) blocks
+ *
+ * @note Only affects AES-GCM
+
+ * @param aad_num_blocks the number of Additional Authenticated Data (AAD) blocks
+ */
+static inline void aes_ll_gcm_set_aad_num_blocks(size_t aad_num_blocks)
+{
+    REG_WRITE(AES_AAD_BLOCK_NUM_REG, aad_num_blocks);
+}
+
+/**
+ * @brief Sets the J0 value, for more information see the GCM subchapter in the TRM
+ *
+ * @note Only affects AES-GCM
+ *
+ * @param j0 J0 value
+ */
+static inline void aes_ll_gcm_set_j0(const uint8_t *j0)
+{
+    uint32_t *reg_addr_buf = (uint32_t *)(AES_J0_MEM);
+    uint32_t j0_word;
+
+    for (int i = 0; i < AES_BLOCK_WORDS; i++) {
+        /* Memcpy to avoid potential unaligned access */
+        memcpy(&j0_word, j0 + 4 * i, sizeof(j0_word));
+        REG_WRITE(&reg_addr_buf[i], j0_word);
+    }
+}
+
+/**
+ * @brief Sets the number of effective bits of incomplete blocks in plaintext/ciphertext.
+ *
+ * @note Only affects AES-GCM
+ *
+ * @param num_valid_bits the number of effective bits of incomplete blocks in plaintext/ciphertext.
+ */
+static inline void aes_ll_gcm_set_num_valid_bit(size_t num_valid_bits)
+{
+    REG_WRITE(AES_REMAINDER_BIT_NUM_REG, num_valid_bits);
+}
+
+/**
+ * @brief Read the tag after a AES-GCM transform
+ *
+ * @param tag Pointer to where to store the result with length TAG_WORDS
+ */
+static inline void aes_ll_gcm_read_tag(uint8_t *tag)
+{
+    uint32_t tag_word;
+    const size_t REG_WIDTH = sizeof(uint32_t);
+
+    for (size_t i = 0; i < TAG_WORDS; i++) {
+        tag_word = REG_READ(AES_T0_MEM + (i * REG_WIDTH));
+        /* Memcpy to avoid potential unaligned access */
+        memcpy(tag + i * 4, &tag_word, sizeof(tag_word));
+    }
+}
 
 #ifdef __cplusplus
 }

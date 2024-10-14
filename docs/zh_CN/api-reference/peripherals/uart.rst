@@ -1,6 +1,8 @@
 通用异步接收器/发送器 (UART)
 ==================================================
 
+:link_to_translation:`en:[English]`
+
 {IDF_TARGET_UART_EXAMPLE_PORT:default = "UART_NUM_1", esp32 = "UART_NUM_2", esp32s3 = "UART_NUM_2"}
 
 简介
@@ -66,6 +68,10 @@ UART 通信参数可以在一个步骤中完成全部配置，也可以在多个
 
 了解配置硬件流控模式的更多信息，请参考 :example:`peripherals/uart/uart_echo`。
 
+.. only:: SOC_UART_SUPPORT_SLEEP_RETENTION
+
+    此外，置位 :cpp:member:`uart_config_t::backup_before_sleep` 会使能在进入睡眠模式前备份 UART 配置寄存器并在退出睡眠后恢复这些寄存器。这个功能使 UART 能够在系统唤醒后继续正常工作，即使其电源域在睡眠过程中被完全关闭。此选项需要用户在功耗和内存使用之间取得平衡。如果功耗不是一个问题，可以禁用这个选项来节省内存。
+
 分步依次配置每个参数
 """""""""""""""""""""""""""""""
 
@@ -114,10 +120,14 @@ UART 通信参数可以在一个步骤中完成全部配置，也可以在多个
 
 通信管脚设置完成后，请调用 :cpp:func:`uart_driver_install` 安装驱动程序并指定以下参数：
 
+- UART 控制器编号
 - Tx 环形缓冲区的大小
 - Rx 环形缓冲区的大小
-- 事件队列句柄和大小
+- 指向事件队列句柄的指针
+- 事件队列大小
 - 分配中断的标志
+
+.. _driver-code-snippet:
 
 该函数将为 UART 驱动程序分配所需的内部资源。
 
@@ -225,23 +235,45 @@ UART 控制器支持多种通信模式，使用函数 :cpp:func:`uart_set_mode` 
 
 根据特定的 UART 状态或检测到的错误，可以生成许多不同的中断。**{IDF_TARGET_NAME} 技术参考手册** > UART 控制器 (UART) > UART 中断 和 UHCI 中断 [`PDF <{IDF_TARGET_TRM_EN_URL}#uart>`__] 中提供了可用中断的完整列表。调用 :cpp:func:`uart_enable_intr_mask` 或 :cpp:func:`uart_disable_intr_mask` 能够分别启用或禁用特定中断。
 
-调用 :cpp:func:`uart_driver_install` 函数可以安装驱动程序的内部中断处理程序，用以管理 Tx 和 Rx 环形缓冲区，并提供事件等高级 API 函数（见下文）。
+UART 驱动提供了一种便利的方法来处理特定的中断，即将中断包装成相应的事件。这些事件定义在 :cpp:type:`uart_event_type_t` 中，FreeRTOS 队列功能可将这些事件报告给用户应用程序。
 
-API 提供了一种便利的方法来处理本文所讨论的特定中断，即用专用函数包装中断：
+要接收已发生的事件，请调用 :cpp:func:`uart_driver_install` 函数并获取返回的事件队列句柄，可参考上述 :ref:`示例代码 <driver-code-snippet>`。
 
-- **事件检测**：:cpp:type:`uart_event_type_t` 定义了多个事件，使用 FreeRTOS 队列功能能够将其报告给用户应用程序。调用 :ref:`uart-api-driver-installation` 中的 :cpp:func:`uart_driver_install` 函数，可以启用此功能，请参考 :example:`peripherals/uart/uart_events` 中使用事件检测的示例。
+UART 驱动可处理的事件包括：
 
-- **达到 FIFO 空间阈值或传输超时**：Tx 和 Rx FIFO 缓冲区在填充特定数量的字符和在发送或接收数据超时的情况下将会触发中断。如要使用此类中断，请执行以下操作：
+- **FIFO 空间溢出** (:cpp:enumerator:`UART_FIFO_OVF`)：当接收到的数据超过 FIFO 的存储能力时，Rx FIFO 会触发中断。
 
-    - 配置缓冲区长度和超时阈值：在结构体 :cpp:type:`uart_intr_config_t` 中输入相应阈值并调用 :cpp:func:`uart_intr_config`
-    - 启用中断：调用函数 :cpp:func:`uart_enable_tx_intr` 和 :cpp:func:`uart_enable_rx_intr`
-    - 禁用中断：调用函数 :cpp:func:`uart_disable_tx_intr` 或 :cpp:func:`uart_disable_rx_intr`
+    - （可选）配置 FIFO 阈值：在结构体 :cpp:type:`uart_intr_config_t` 中输入阈值，然后调用 :cpp:func:`uart_intr_config` 使能配置。这有助于驱动及时处理 RX FIFO 中的数据，避免 FIFO 溢出。
+    - 启用中断：调用函数 :cpp:func:`uart_enable_rx_intr`
+    - 禁用中断：调用函数 :cpp:func:`uart_disable_rx_intr`
 
-- **模式检测**：在检测到重复接收/发送同一字符的“模式”时触发中断，请参考示例 :example:`peripherals/uart/uart_events`。例如，模式检测可用于检测命令字符串末尾是否存在特定数量的相同字符（“模式”）。可以调用以下函数：
+  .. code-block:: c
+
+      const uart_port_t uart_num = {IDF_TARGET_UART_EXAMPLE_PORT};
+      // Configure a UART interrupt threshold and timeout
+      uart_intr_config_t uart_intr = {
+          .intr_enable_mask = UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT,
+          .rxfifo_full_thresh = 100,
+          .rx_timeout_thresh = 10,
+      };
+      ESP_ERROR_CHECK(uart_intr_config(uart_num, &uart_intr));
+
+      // Enable UART RX FIFO full threshold and timeout interrupts
+      ESP_ERROR_CHECK(uart_enable_rx_intr(uart_num));
+
+- **模式检测** (:cpp:enumerator:`UART_PATTERN_DET`)：在检测到重复接收/发送同一字符的“模式”时触发中断，例如，模式检测可用于检测命令字符串末尾是否存在特定数量的相同字符（“模式”）。可以调用以下函数：
 
     - 配置并启用此中断：调用 :cpp:func:`uart_enable_pattern_det_baud_intr`
     - 禁用中断：调用 :cpp:func:`uart_disable_pattern_det_intr`
 
+  .. code-block:: c
+
+      //Set UART pattern detect function
+      uart_enable_pattern_det_baud_intr(EX_UART_NUM, '+', PATTERN_CHR_NUM, 9, 0, 0);
+
+- **其他事件**：UART 驱动可处理的其他事件包括数据接收 (:cpp:enumerator:`UART_DATA`)、环形缓冲区已满 (:cpp:enumerator:`UART_BUFFER_FULL`)、在停止位后检测到 NULL (:cpp:enumerator:`UART_BREAK`)、奇偶校验错误 (:cpp:enumerator:`UART_PARITY_ERR`)、以及帧错误 (:cpp:enumerator:`UART_FRAME_ERR`)。
+
+括号中的字符串为相应的事件名称。请参考 :example:`peripherals/uart/uart_events` 中处理 UART 事件的示例。
 
 .. _uart-api-deleting-driver:
 
@@ -383,26 +415,13 @@ RS485 特定通信模式简介
 应用示例
 --------------------
 
-下表列出了目录 :example:`peripherals/uart/` 下可用的代码示例。
-
-.. list-table::
-   :widths: 35 65
-   :header-rows: 1
-
-   * - 代码示例
-     - 描述
-   * - :example:`peripherals/uart/uart_echo`
-     - 配置 UART 设置、安装 UART 驱动程序以及通过 UART1 接口读取/写入。
-   * - :example:`peripherals/uart/uart_events`
-     - 报告各种通信事件，使用模式检测中断。
-   * - :example:`peripherals/uart/uart_async_rxtxtasks`
-     - 通过同一 UART 在两个独立的 FreeRTOS 任务中发送和接收数据。
-   * - :example:`peripherals/uart/uart_select`
-     - 针对 UART 文件描述符使用同步 I/O 多路复用。
-   * - :example:`peripherals/uart/uart_echo_rs485`
-     - 设置 UART 驱动程序以半双工模式通过 RS485 接口进行通信。此示例与 :example:`peripherals/uart/uart_echo` 类似，但允许通过连接到 {IDF_TARGET_NAME} 管脚的 RS485 接口芯片进行通信。
-   * - :example:`peripherals/uart/nmea0183_parser`
-     - 解析通过 UART 外设从 GPS 收到的 NMEA0183 语句来获取 GPS 信息。
+* :example:`peripherals/uart/uart_async_rxtxtasks` 演示了通过同一 UART 接口完成两个独立任务的通信。其中一个任务定期发送 "Hello world"，另一个任务接收并打印 UART 接收到的数据。
+* :example:`peripherals/uart/uart_echo` 演示了使用 UART 接口回显接收到的所有数据。
+* :example:`peripherals/uart/uart_echo_rs485` 演示了如何使用 UART 软件驱动程序以 RS485 半双工传输模式回显接收到的 UART 数据，要求外部连接总线驱动器。
+* :example:`peripherals/uart/uart_events` 演示了如何使用 UART 驱动程序处理特殊的 UART 事件，从 UART0 读取数据，并将数据回显到监视控制台。
+* :example:`peripherals/uart/uart_repl` 演示了如何使用和连接两个 UART 接口，使用于标准输出的 UART 可以发送命令并接收来自另一个控制台 UART 的回复，无需人工交互。
+* :example:`peripherals/uart/uart_select` 演示了在 UART 接口上使用 ``select()`` 函数来同步 I/O 多路复用，允许从/向各种来源（如 UART 和套接字）进行非阻塞读写操作，从而立即处理准备就绪的资源。
+* :example:`peripherals/uart/nmea0183_parser` 演示了如何使用 ESP UART 事件驱动程序和 ESP 事件循环库来解析来自 GPS/BDS/GLONASS 模块的 NMEA-0183 数据流，并输出常见的信息，如 UTC 时间、纬度、经度、海拔和速度。
 
 
 API 参考

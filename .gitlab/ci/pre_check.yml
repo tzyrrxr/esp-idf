@@ -25,7 +25,8 @@ check_version:
 check_api_usage:
   extends: .pre_check_template
   script:
-    - tools/ci/check_examples_rom_header.sh
+    - python -m pip install ast-grep-cli # use ast-grep to describe customized lint rules
+    - ast-grep scan
     - tools/ci/check_api_violation.sh
     - tools/ci/check_examples_extra_component_dirs.sh
 
@@ -53,21 +54,6 @@ check_blobs:
     - IDF_TARGET=esp32h2 $IDF_PATH/components/esp_coex/test_md5/test_md5.sh
     # Check if Wi-Fi, PHY, BT blobs contain references to specific symbols
     - bash $IDF_PATH/tools/ci/check_blobs.sh
-
-check_public_headers:
-  extends:
-    - .pre_check_template
-    - .rules:build:check
-  script:
-    - IDF_TARGET=esp32 python tools/ci/check_public_headers.py --jobs 4 --prefix xtensa-esp32-elf-
-    - IDF_TARGET=esp32s2 python tools/ci/check_public_headers.py --jobs 4 --prefix xtensa-esp32s2-elf-
-    - IDF_TARGET=esp32s3 python tools/ci/check_public_headers.py --jobs 4 --prefix xtensa-esp32s3-elf-
-    - IDF_TARGET=esp32c3 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
-    - IDF_TARGET=esp32c2 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
-    - IDF_TARGET=esp32c6 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
-    - IDF_TARGET=esp32c5 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
-    - IDF_TARGET=esp32h2 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
-    - IDF_TARGET=esp32p4 python tools/ci/check_public_headers.py --jobs 4 --prefix riscv32-esp-elf-
 
 check_chip_support_components:
   extends:
@@ -149,6 +135,7 @@ pipeline_variables:
     # MODIFIED_FILES is a list of files that changed, could be used everywhere
     - MODIFIED_FILES=$(echo "$GIT_DIFF_OUTPUT" | xargs)
     - echo "MODIFIED_FILES=$MODIFIED_FILES" >> pipeline.env
+    - echo "REPORT_EXIT_CODE=0" >> pipeline.env
     # MR_MODIFIED_FILES and MR_MODIFIED_COMPONENTS are semicolon separated lists that is used in MR only
     # for non MR pipeline, these are empty lists
     - |
@@ -166,6 +153,12 @@ pipeline_variables:
       if echo "$CI_MERGE_REQUEST_LABELS" | egrep "(^|,)BUILD_AND_TEST_ALL_APPS(,|$)"; then
         echo "BUILD_AND_TEST_ALL_APPS=1" >> pipeline.env
       fi
+    # run full pipeline if testing constraint branch
+    - |
+      if [ -n "$CI_PYTHON_CONSTRAINT_BRANCH" ]; then
+        echo "BUILD_AND_TEST_ALL_APPS=1" >> pipeline.env
+      fi
+    - python tools/ci/ci_process_description.py
     - cat pipeline.env
     - python tools/ci/artifacts_handler.py upload --type modified_files_and_components_report
   artifacts:
@@ -176,9 +169,34 @@ pipeline_variables:
     expire_in: 1 week
     when: always
 
-check_test_cases_env_markers_and_required_runners:
+baseline_manifest_sha:
   extends:
     - .pre_check_template
+    - .rules:dev-push
   tags: [fast_run, shiny]
   script:
-    - python tools/ci/dynamic_pipelines/scripts/generate_target_test_child_pipeline.py --check
+    - |
+      if [ -n "$CI_MERGE_REQUEST_DIFF_BASE_SHA" ]; then
+        git fetch origin $CI_MERGE_REQUEST_DIFF_BASE_SHA --depth=1
+        git checkout FETCH_HEAD
+        idf-build-apps dump-manifest-sha \
+          --manifest-files $(find . -name ".build-test-rules.yml" | xargs) \
+          --output .manifest_sha
+      fi
+  artifacts:
+    paths:
+      - .manifest_sha
+    expire_in: 1 week
+    when: always
+
+redundant_pass_job:
+  stage: pre_check
+  tags: [shiny, fast_run]
+  image: $ESP_ENV_IMAGE
+  dependencies: null
+  before_script: []
+  cache: []
+  extends: []
+  script:
+    - echo "This job is redundant to ensure the 'retry_failed_jobs' job can exist and not be skipped"
+  when: always

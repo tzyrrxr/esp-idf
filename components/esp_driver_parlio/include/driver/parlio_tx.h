@@ -32,6 +32,7 @@ typedef struct {
                                       Note that, the valid signal will always occupy the MSB data bit */
     size_t trans_queue_depth; /*!< Depth of internal transaction queue */
     size_t max_transfer_size; /*!< Maximum transfer size in one transaction, in bytes. This decides the number of DMA nodes will be used for each transaction */
+    size_t dma_burst_size;    /*!< DMA burst size, in bytes */
     parlio_sample_edge_t sample_edge;       /*!< Parallel IO sample edge */
     parlio_bit_pack_order_t bit_pack_order; /*!< Set the order of packing the bits into bytes (only works when `data_width` < 8) */
     struct {
@@ -150,12 +151,15 @@ esp_err_t parlio_tx_unit_register_event_callbacks(parlio_tx_unit_handle_t tx_uni
  */
 typedef struct {
     uint32_t idle_value; /*!< The value on the data line when the parallel IO is in idle state */
+    struct {
+        uint32_t queue_nonblocking : 1; /*!< If set, when the transaction queue is full, driver will not block the thread but return directly */
+    } flags;                            /*!< Transmit specific config flags */
 } parlio_transmit_config_t;
 
 /**
  * @brief Transmit data on by Parallel IO TX unit
  *
- * @note After the function returns, it doesn't mean the transaction is finished. This function only constructs a transcation structure and push into a queue.
+ * @note After the function returns, it doesn't mean the transaction is finished. This function only constructs a transaction structure and push into a queue.
  *
  * @param[in] tx_unit Parallel IO TX unit that created by `parlio_new_tx_unit`
  * @param[in] payload Pointer to the data to be transmitted

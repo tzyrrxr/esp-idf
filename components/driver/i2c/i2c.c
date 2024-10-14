@@ -129,13 +129,13 @@ static const char *I2C_TAG = "i2c";
 /**
  * I2C bus are defined in the header files, let's check that the values are correct
  */
-#if SOC_I2C_NUM >= 2
+#if SOC_HP_I2C_NUM >= 2
 _Static_assert(I2C_NUM_1 == 1, "I2C_NUM_1 must be equal to 1");
-#endif // SOC_I2C_NUM >= 2
+#endif // SOC_HP_I2C_NUM >= 2
 #if SOC_LP_I2C_SUPPORTED
-_Static_assert(I2C_NUM_MAX == (SOC_I2C_NUM + SOC_LP_I2C_NUM), "I2C_NUM_MAX must be equal to SOC_I2C_NUM + SOC_LP_I2C_NUM");
+_Static_assert(I2C_NUM_MAX == (SOC_HP_I2C_NUM + SOC_LP_I2C_NUM), "I2C_NUM_MAX must be equal to SOC_HP_I2C_NUM + SOC_LP_I2C_NUM");
 #else
-_Static_assert(I2C_NUM_MAX == SOC_I2C_NUM, "I2C_NUM_MAX must be equal to SOC_I2C_NUM");
+_Static_assert(I2C_NUM_MAX == SOC_HP_I2C_NUM, "I2C_NUM_MAX must be equal to SOC_HP_I2C_NUM");
 #endif /* SOC_LP_I2C_SUPPORTED */
 
 typedef struct {
@@ -225,7 +225,7 @@ static i2c_context_t i2c_context[I2C_NUM_MAX] = {
     I2C_CONTEX_INIT_DEF(I2C_NUM_0),
     /* Now that I2C_NUM_MAX is part of an enum (i2c_port_t), we cannot use
      * it anomore in the preprocessor! */
-#if SOC_I2C_NUM > 1
+#if SOC_HP_I2C_NUM > 1
     I2C_CONTEX_INIT_DEF(I2C_NUM_1),
 #endif
 };
@@ -275,6 +275,16 @@ static void i2c_hw_enable(i2c_port_t i2c_num)
     }
     I2C_EXIT_CRITICAL(&(i2c_context[i2c_num].spinlock));
 }
+
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_I2C_SUPPORT_SLEEP_RETENTION
+static esp_err_t i2c_sleep_retention_init(void *arg)
+{
+    i2c_port_t i2c_num = *(i2c_port_t *)arg;
+    esp_err_t ret = sleep_retention_entries_create(i2c_regs_retention[i2c_num].link_list, i2c_regs_retention[i2c_num].link_num, REGDMA_LINK_PRI_I2C, I2C_SLEEP_RETENTION_MODULE(i2c_num));
+    ESP_RETURN_ON_ERROR(ret, I2C_TAG, "failed to allocate mem for sleep retention");
+    return ret;
+}
+#endif
 
 /*
     For i2c master mode, we don't need to use a buffer for the data, the APIs will execute the master commands
@@ -414,9 +424,14 @@ esp_err_t i2c_driver_install(i2c_port_t i2c_num, i2c_mode_t mode, size_t slv_rx_
     }
 #endif // SOC_I2C_SUPPORT_SLAVE
 
-#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
-    ret = sleep_retention_entries_create(i2c_regs_retention[i2c_num].link_list, i2c_regs_retention[i2c_num].link_num, REGDMA_LINK_PRI_7, I2C_SLEEP_RETENTION_MODULE(i2c_num));
-    ESP_GOTO_ON_ERROR(ret, err, I2C_TAG, "failed to allocate mem for sleep retention");
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_I2C_SUPPORT_SLEEP_RETENTION
+    sleep_retention_module_init_param_t init_param = {
+        .cbs = { .create = { .handle = i2c_sleep_retention_init, .arg = &i2c_num } }
+    };
+    ret = sleep_retention_module_init(I2C_SLEEP_RETENTION_MODULE(i2c_num), &init_param);
+    if (ret == ESP_OK) {
+        sleep_retention_module_allocate(I2C_SLEEP_RETENTION_MODULE(i2c_num));
+    }
 #endif
     return ESP_OK;
 
@@ -470,8 +485,11 @@ esp_err_t i2c_driver_delete(i2c_port_t i2c_num)
     esp_intr_free(p_i2c->intr_handle);
     p_i2c->intr_handle = NULL;
 
-#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP
-    sleep_retention_entries_destroy(I2C_SLEEP_RETENTION_MODULE(i2c_num));
+#if CONFIG_PM_POWER_DOWN_PERIPHERAL_IN_LIGHT_SLEEP && SOC_I2C_SUPPORT_SLEEP_RETENTION
+    esp_err_t err = sleep_retention_module_free(I2C_SLEEP_RETENTION_MODULE(i2c_num));
+    if (err == ESP_OK) {
+        err = sleep_retention_module_deinit(I2C_SLEEP_RETENTION_MODULE(i2c_num));
+    }
 #endif
 
     if (p_i2c->cmd_mux) {
@@ -666,7 +684,10 @@ static esp_err_t i2c_master_clear_bus(i2c_port_t i2c_num)
     gpio_set_level(sda_io, 1); // STOP, SDA low -> high while SCL is HIGH
     i2c_set_pin(i2c_num, sda_io, scl_io, 1, 1, I2C_MODE_MASTER);
 #else
-    i2c_ll_master_clr_bus(i2c_context[i2c_num].hal.dev, I2C_CLR_BUS_SCL_NUM);
+    i2c_ll_master_clr_bus(i2c_context[i2c_num].hal.dev, I2C_CLR_BUS_SCL_NUM, true);
+    while (i2c_ll_master_is_bus_clear_done(i2c_context[i2c_num].hal.dev)) {
+    }
+    i2c_ll_update(i2c_context[i2c_num].hal.dev);
 #endif
     return ESP_OK;
 }
@@ -1198,7 +1219,7 @@ static esp_err_t i2c_cmd_allocate(i2c_cmd_desc_t *cmd_desc, size_t n, size_t siz
             /* Allocate the pointer. */
             *outptr = cmd_desc->free_buffer;
 
-            /* Decrement the free size from the user's bufffer. */
+            /* Decrement the free size from the user's buffer. */
             cmd_desc->free_buffer += required;
             cmd_desc->free_size -= required;
         }

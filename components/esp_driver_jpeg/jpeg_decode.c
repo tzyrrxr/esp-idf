@@ -24,6 +24,7 @@
 #include "soc/dma2d_channel.h"
 #include "soc/interrupts.h"
 #include "esp_dma_utils.h"
+#include "esp_private/esp_cache_private.h"
 #if CONFIG_JPEG_ENABLE_DEBUG_LOG
 // The local log level must be defined before including esp_log.h
 // Set the maximum log level for this source file
@@ -34,8 +35,6 @@
 #include "esp_check.h"
 
 static const char *TAG = "jpeg.decoder";
-
-#define ALIGN_UP(num, align)    (((num) + ((align) - 1)) & ~((align) - 1))
 
 static void s_decoder_error_log_print(uint32_t status);
 static esp_err_t jpeg_dec_config_dma_descriptor(jpeg_decoder_handle_t decoder_engine);
@@ -76,7 +75,7 @@ esp_err_t jpeg_new_decoder_engine(const jpeg_decode_engine_cfg_t *dec_eng_cfg, j
 
     uint32_t cache_line_size = cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA);
     uint32_t alignment = cache_line_size;
-    size_t dma_desc_mem_size = ALIGN_UP(sizeof(dma2d_descriptor_t), cache_line_size);
+    size_t dma_desc_mem_size = JPEG_ALIGN_UP(sizeof(dma2d_descriptor_t), cache_line_size);
 
     decoder_engine->rxlink = (dma2d_descriptor_t*)heap_caps_aligned_calloc(alignment, 1, dma_desc_mem_size, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | JPEG_MEM_ALLOC_CAPS);
     ESP_GOTO_ON_FALSE(decoder_engine->rxlink, ESP_ERR_NO_MEM, err, TAG, "no memory for jpeg decode rxlink");
@@ -94,7 +93,7 @@ esp_err_t jpeg_new_decoder_engine(const jpeg_decode_engine_cfg_t *dec_eng_cfg, j
     /// init jpeg interrupt.
     jpeg_ll_clear_intr_mask(hal->dev, JPEG_LL_DECODER_EVENT_INTR);
 
-    ESP_GOTO_ON_ERROR(jpeg_check_intr_priority(decoder_engine->codec_base, dec_eng_cfg->intr_priority), err, TAG, "set group intrrupt priority failed");
+    ESP_GOTO_ON_ERROR(jpeg_check_intr_priority(decoder_engine->codec_base, dec_eng_cfg->intr_priority), err, TAG, "set group interrupt priority failed");
     if (dec_eng_cfg->intr_priority) {
         ESP_RETURN_ON_FALSE(1 << (dec_eng_cfg->intr_priority) & JPEG_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, TAG, "invalid interrupt priority:%d", dec_eng_cfg->intr_priority);
     }
@@ -145,6 +144,7 @@ esp_err_t jpeg_decoder_get_info(const uint8_t *in_buf, uint32_t inbuf_len, jpeg_
     uint16_t width = 0;
     uint8_t thischar = 0;
     uint8_t lastchar = 0;
+    uint8_t hivi = 0;
 
     while (header_info->buffer_left) {
         lastchar = thischar;
@@ -156,9 +156,13 @@ esp_err_t jpeg_decoder_get_info(const uint8_t *in_buf, uint32_t inbuf_len, jpeg_
             jpeg_get_bytes(header_info, 1);
             height = jpeg_get_bytes(header_info, 2);
             width = jpeg_get_bytes(header_info, 2);
+
+            jpeg_get_bytes(header_info, 1);
+            jpeg_get_bytes(header_info, 1);
+            hivi = jpeg_get_bytes(header_info, 1);
             break;
         }
-        // This function only used for get width and hight. So only read SOF marker is enough.
+        // This function only used for get width and height. So only read SOF marker is enough.
         // Can be extended if picture information is extended.
         if (marker == JPEG_M_SOF0) {
             break;
@@ -168,17 +172,35 @@ esp_err_t jpeg_decoder_get_info(const uint8_t *in_buf, uint32_t inbuf_len, jpeg_
     picture_info->height = height;
     picture_info->width = width;
 
+    switch (hivi) {
+    case 0x11:
+        picture_info->sample_method = JPEG_DOWN_SAMPLING_YUV444;
+        break;
+    case 0x21:
+        picture_info->sample_method = JPEG_DOWN_SAMPLING_YUV422;
+        break;
+    case 0x22:
+        picture_info->sample_method = JPEG_DOWN_SAMPLING_YUV420;
+        break;
+    default:
+        ESP_LOGE(TAG, "Sampling factor cannot be recognized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
     free(header_info);
     return ESP_OK;
 }
 
-esp_err_t jpeg_decoder_process(jpeg_decoder_handle_t decoder_engine, const jpeg_decode_cfg_t *decode_cfg, const uint8_t *bit_stream, uint32_t stream_size, uint8_t *decode_outbuf, uint32_t *out_size)
+esp_err_t jpeg_decoder_process(jpeg_decoder_handle_t decoder_engine, const jpeg_decode_cfg_t *decode_cfg, const uint8_t *bit_stream, uint32_t stream_size, uint8_t *decode_outbuf, uint32_t outbuf_size, uint32_t *out_size)
 {
     ESP_RETURN_ON_FALSE(decoder_engine, ESP_ERR_INVALID_ARG, TAG, "jpeg decode handle is null");
     ESP_RETURN_ON_FALSE(decode_cfg, ESP_ERR_INVALID_ARG, TAG, "jpeg decode config is null");
     ESP_RETURN_ON_FALSE(decode_outbuf, ESP_ERR_INVALID_ARG, TAG, "jpeg decode picture buffer is null");
-    ESP_RETURN_ON_FALSE(((uintptr_t)bit_stream % cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA)) == 0, ESP_ERR_INVALID_ARG, TAG, "jpeg decode bit stream is not aligned, please use jpeg_alloc_decoder_mem to malloc your buffer");
-    ESP_RETURN_ON_FALSE(((uintptr_t)decode_outbuf % cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA)) == 0, ESP_ERR_INVALID_ARG, TAG, "jpeg decode decode_outbuf is not aligned, please use jpeg_alloc_decoder_mem to malloc your buffer");
+    esp_dma_mem_info_t dma_mem_info = {
+        .dma_alignment_bytes = 4,
+    };
+    //TODO: IDF-9637
+    ESP_RETURN_ON_FALSE(esp_dma_is_buffer_alignment_satisfied(decode_outbuf, outbuf_size, dma_mem_info), ESP_ERR_INVALID_ARG, TAG, "jpeg decode decode_outbuf or out_buffer size is not aligned, please use jpeg_alloc_decoder_mem to malloc your buffer");
 
     esp_err_t ret = ESP_OK;
 
@@ -193,12 +215,14 @@ esp_err_t jpeg_decoder_process(jpeg_decoder_handle_t decoder_engine, const jpeg_
     decoder_engine->output_format = decode_cfg->output_format;
     decoder_engine->rgb_order = decode_cfg->rgb_order;
     decoder_engine->conv_std = decode_cfg->conv_std;
-
     decoder_engine->decoded_buf = decode_outbuf;
 
-    ESP_GOTO_ON_ERROR(jpeg_parse_marker(decoder_engine, bit_stream, stream_size), err, TAG, "jpeg parse marker failed");
-    ESP_GOTO_ON_ERROR(jpeg_parse_header_info_to_hw(decoder_engine), err, TAG, "write header info to hw failed");
-    ESP_GOTO_ON_ERROR(jpeg_dec_config_dma_descriptor(decoder_engine), err, TAG, "config dma descriptor failed");
+    ESP_GOTO_ON_ERROR(jpeg_parse_marker(decoder_engine, bit_stream, stream_size), err2, TAG, "jpeg parse marker failed");
+    ESP_GOTO_ON_ERROR(jpeg_parse_header_info_to_hw(decoder_engine), err2, TAG, "write header info to hw failed");
+    ESP_GOTO_ON_ERROR(jpeg_dec_config_dma_descriptor(decoder_engine), err2, TAG, "config dma descriptor failed");
+
+    *out_size = decoder_engine->header_info->process_h * decoder_engine->header_info->process_v * decoder_engine->bit_per_pixel / 8;
+    ESP_GOTO_ON_FALSE((*out_size <= outbuf_size), ESP_ERR_INVALID_ARG, err2, TAG, "Given buffer size % " PRId32 " is smaller than actual jpeg decode output size % " PRId32 "the height and width of output picture size will be adjusted to 16 bytes aligned automatically", outbuf_size, *out_size);
 
     dma2d_trans_config_t trans_desc = {
         .tx_channel_num = 1,
@@ -212,38 +236,41 @@ esp_err_t jpeg_decoder_process(jpeg_decoder_handle_t decoder_engine, const jpeg_
     ret = esp_cache_msync((void*)decoder_engine->header_info->buffer_offset, decoder_engine->header_info->buffer_left, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
     assert(ret == ESP_OK);
 
-    // Before 2DDMA starts. invalid memory space of decoded buffer
-    ret = esp_cache_msync((void*)decoder_engine->decoded_buf, decoder_engine->header_info->process_h * decoder_engine->header_info->process_v * decoder_engine->pixel, ESP_CACHE_MSYNC_FLAG_DIR_M2C | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
-    assert(ret == ESP_OK);
-
-    ESP_GOTO_ON_ERROR(dma2d_enqueue(decoder_engine->dma2d_group_handle, &trans_desc, decoder_engine->trans_desc), err, TAG, "enqueue dma2d failed");
+    ESP_GOTO_ON_ERROR(dma2d_enqueue(decoder_engine->dma2d_group_handle, &trans_desc, decoder_engine->trans_desc), err2, TAG, "enqueue dma2d failed");
     bool need_yield;
     // Blocking for JPEG decode transaction finishes.
     while (1) {
         jpeg_dma2d_dec_evt_t jpeg_dma2d_event;
-        BaseType_t ret = xQueueReceive(decoder_engine->evt_queue, &jpeg_dma2d_event, decoder_engine->timeout_tick);
-        ESP_GOTO_ON_FALSE(ret == pdTRUE, ESP_ERR_TIMEOUT, err, TAG, "jpeg-dma2d handle jpeg decode timeout, please check `timeout_ms` ");
+        BaseType_t ret_val = xQueueReceive(decoder_engine->evt_queue, &jpeg_dma2d_event, decoder_engine->timeout_tick);
+        ESP_GOTO_ON_FALSE(ret_val == pdTRUE, ESP_ERR_TIMEOUT, err1, TAG, "jpeg-dma2d handle jpeg decode timeout, please check image accuracy and `timeout_ms` ");
 
         // Dealing with JPEG event
         if (jpeg_dma2d_event.jpgd_status != 0) {
             uint32_t status = jpeg_dma2d_event.jpgd_status;
             s_decoder_error_log_print(status);
-            dma2d_force_end(decoder_engine->trans_desc, &need_yield);
-            xSemaphoreGive(decoder_engine->codec_base->codec_mutex);
-            return ESP_ERR_INVALID_STATE;
+            ret = ESP_ERR_INVALID_STATE;
+            goto err1;
         }
 
         if (jpeg_dma2d_event.dma_evt & JPEG_DMA2D_RX_EOF) {
+            ret = esp_cache_msync((void*)decoder_engine->decoded_buf, outbuf_size, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+            assert(ret == ESP_OK);
             break;
         }
     }
 
-    *out_size = decoder_engine->header_info->process_h * decoder_engine->header_info->process_v * decoder_engine->pixel;
-
-err:
     xSemaphoreGive(decoder_engine->codec_base->codec_mutex);
     if (decoder_engine->codec_base->pm_lock) {
         ESP_RETURN_ON_ERROR(esp_pm_lock_release(decoder_engine->codec_base->pm_lock), TAG, "release pm_lock failed");
+    }
+    return ESP_OK;
+
+err1:
+    dma2d_force_end(decoder_engine->trans_desc, &need_yield);
+err2:
+    xSemaphoreGive(decoder_engine->codec_base->codec_mutex);
+    if (decoder_engine->codec_base->pm_lock) {
+        esp_pm_lock_release(decoder_engine->codec_base->pm_lock);
     }
     return ret;
 }
@@ -251,7 +278,6 @@ err:
 esp_err_t jpeg_del_decoder_engine(jpeg_decoder_handle_t decoder_engine)
 {
     ESP_RETURN_ON_FALSE(decoder_engine, ESP_ERR_INVALID_ARG, TAG, "jpeg decode handle is null");
-    ESP_RETURN_ON_ERROR(jpeg_release_codec_handle(decoder_engine->codec_base), TAG, "release codec failed");
 
     if (decoder_engine) {
         if (decoder_engine->rxlink) {
@@ -275,14 +301,29 @@ esp_err_t jpeg_del_decoder_engine(jpeg_decoder_handle_t decoder_engine)
         if (decoder_engine->intr_handle) {
             jpeg_isr_deregister(decoder_engine->codec_base, decoder_engine->intr_handle);
         }
+        ESP_RETURN_ON_ERROR(jpeg_release_codec_handle(decoder_engine->codec_base), TAG, "release codec failed");
         free(decoder_engine);
     }
     return ESP_OK;
 }
 
-void * jpeg_alloc_decoder_mem(size_t size)
+void *jpeg_alloc_decoder_mem(size_t size, const jpeg_decode_memory_alloc_cfg_t *mem_cfg, size_t *allocated_size)
 {
-    return heap_caps_aligned_calloc(cache_hal_get_cache_line_size(CACHE_LL_LEVEL_EXT_MEM, CACHE_TYPE_DATA), 1, size, JPEG_MEM_ALLOC_CAPS);
+    /*
+       Principle of buffer align.
+       For output buffer(for decoder is 2DDMA write to PSRAM), both address and size should be aligned according to cache invalidate.
+       FOr input buffer(for decoder is PSRAM write to 2DDMA), no restriction for any align (both cache writeback and requirement from 2DDMA).
+    */
+    size_t cache_align = 0;
+    esp_cache_get_alignment(MALLOC_CAP_SPIRAM, &cache_align);
+    if (mem_cfg->buffer_direction == JPEG_DEC_ALLOC_OUTPUT_BUFFER) {
+        size = JPEG_ALIGN_UP(size, cache_align);
+        *allocated_size = size;
+        return heap_caps_aligned_calloc(cache_align, 1, size, MALLOC_CAP_SPIRAM);
+    } else {
+        *allocated_size = size;
+        return heap_caps_calloc(1, size, MALLOC_CAP_SPIRAM);
+    }
 }
 
 /****************************************************************
@@ -313,23 +354,49 @@ static esp_err_t jpeg_dec_config_dma_descriptor(jpeg_decoder_handle_t decoder_en
     jpeg_dec_format_hb_t best_hb_idx = 0;
     color_space_pixel_format_t picture_format;
     picture_format.color_type_id = decoder_engine->output_format;
-    decoder_engine->pixel = color_hal_pixel_format_get_bit_depth(picture_format) / 8;
-    switch (decoder_engine->output_format) {
-    case JPEG_DECODE_OUT_FORMAT_RGB888:
-        best_hb_idx = JPEG_DEC_RGB888_HB;
+    decoder_engine->bit_per_pixel = color_hal_pixel_format_get_bit_depth(picture_format);
+    if (decoder_engine->no_color_conversion == false) {
+        switch (decoder_engine->output_format) {
+        case JPEG_DECODE_OUT_FORMAT_RGB888:
+            best_hb_idx = JPEG_DEC_RGB888_HB;
+            break;
+        case JPEG_DECODE_OUT_FORMAT_RGB565:
+            best_hb_idx = JPEG_DEC_RGB565_HB;
+            break;
+        case JPEG_DECODE_OUT_FORMAT_GRAY:
+            best_hb_idx = JPEG_DEC_GRAY_HB;
+            break;
+        case JPEG_DECODE_OUT_FORMAT_YUV444:
+            best_hb_idx = JPEG_DEC_YUV444_HB;
+            break;
+        default:
+            ESP_LOGE(TAG, "wrong, we don't support decode to such format.");
+            return ESP_ERR_NOT_SUPPORTED;
+        }
+    } else {
+        best_hb_idx = JPEG_DEC_DIRECT_OUTPUT_HB;
+    }
+
+    uint8_t sample_method_idx = 0;
+    switch (decoder_engine->sample_method) {
+    case JPEG_DOWN_SAMPLING_YUV444:
+        sample_method_idx = 0;
         break;
-    case JPEG_DECODE_OUT_FORMAT_RGB565:
-        best_hb_idx = JPEG_DEC_RGB565_HB;
+    case JPEG_DOWN_SAMPLING_YUV422:
+        sample_method_idx = 1;
         break;
-    case JPEG_DECODE_OUT_FORMAT_GRAY:
-        best_hb_idx = JPEG_DEC_GRAY_HB;
+    case JPEG_DOWN_SAMPLING_YUV420:
+        sample_method_idx = 2;
+        break;
+    case JPEG_DOWN_SAMPLING_GRAY:
+        sample_method_idx = 3;
         break;
     default:
-        ESP_LOGE(TAG, "wrong, we don't support decode to such format.");
+        ESP_LOGE(TAG, "wrong, we don't support such sampling mode.");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    uint32_t dma_hb = dec_hb_tbl[decoder_engine->sample_method][best_hb_idx];
+    uint32_t dma_hb = dec_hb_tbl[sample_method_idx][best_hb_idx];
     uint32_t dma_vb = decoder_engine->header_info->mcuy;
 
     // Configure tx link descriptor
@@ -360,7 +427,6 @@ static void jpeg_dec_config_dma_csc(jpeg_decoder_handle_t decoder_engine, dma2d_
 
     dma2d_scramble_order_t post_scramble = DMA2D_SCRAMBLE_ORDER_BYTE2_1_0;
     dma2d_csc_rx_option_t rx_csc_option = DMA2D_CSC_RX_NONE;
-
     // Config output Endians
     if (decoder_engine->rgb_order == JPEG_DEC_RGB_ELEMENT_ORDER_RGB) {
         if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_RGB565) {
@@ -383,7 +449,13 @@ static void jpeg_dec_config_dma_csc(jpeg_decoder_handle_t decoder_engine, dma2d_
         } else if (decoder_engine->conv_std == JPEG_YUV_RGB_CONV_STD_BT709) {
             rx_csc_option = DMA2D_CSC_RX_YUV420_TO_RGB888_709;
         }
-    } else if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_GRAY) {
+    } else if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_YUV444) {
+        if (decoder_engine->sample_method == JPEG_DOWN_SAMPLING_YUV422) {
+            rx_csc_option = DMA2D_CSC_RX_YUV422_TO_YUV444;
+        } else if (decoder_engine->sample_method == JPEG_DOWN_SAMPLING_YUV420) {
+            rx_csc_option = DMA2D_CSC_RX_YUV420_TO_YUV444;
+        }
+    } else {
         rx_csc_option = DMA2D_CSC_RX_NONE;
     }
 
@@ -478,6 +550,27 @@ static bool jpeg_dec_transaction_on_picked(uint32_t channel_num, const dma2d_tra
     return false;
 }
 
+static esp_err_t jpeg_color_space_support_check(jpeg_decoder_handle_t decoder_engine)
+{
+    if (decoder_engine->sample_method == JPEG_DOWN_SAMPLING_YUV444) {
+        if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_YUV422 || decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_YUV420) {
+            ESP_LOGE(TAG, "Detected YUV444 but want to convert to YUV422/YUV420, which is not supported");
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else if (decoder_engine->sample_method == JPEG_DOWN_SAMPLING_YUV422) {
+        if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_YUV420) {
+            ESP_LOGE(TAG, "Detected YUV422 but want to convert to YUV420, which is not supported");
+            return ESP_ERR_INVALID_ARG;
+        }
+    } else if (decoder_engine->sample_method == JPEG_DOWN_SAMPLING_YUV420) {
+        if (decoder_engine->output_format == JPEG_DECODE_OUT_FORMAT_YUV422) {
+            ESP_LOGE(TAG, "Detected YUV420 but want to convert to YUV422, which is not supported");
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t jpeg_parse_header_info_to_hw(jpeg_decoder_handle_t decoder_engine)
 {
     ESP_RETURN_ON_FALSE(decoder_engine, ESP_ERR_INVALID_ARG, TAG, "jpeg decode handle is null");
@@ -517,6 +610,12 @@ static esp_err_t jpeg_parse_header_info_to_hw(jpeg_decoder_handle_t decoder_engi
             return ESP_ERR_NOT_SUPPORTED;
         }
         decoder_engine->sample_method = JPEG_DOWN_SAMPLING_GRAY;
+    }
+
+    ESP_RETURN_ON_ERROR(jpeg_color_space_support_check(decoder_engine), TAG, "jpeg decoder not support the combination of output format and down sampling format");
+
+    if ((uint32_t)decoder_engine->sample_method == (uint32_t)decoder_engine->output_format) {
+        decoder_engine->no_color_conversion = true;
     }
 
     // Write DHT information
@@ -669,7 +768,7 @@ static void s_decoder_error_log_print(uint32_t status)
     if (status & JPEG_LL_INTR_MARKER_ERR_OTHER) {
         ESP_LOGE(TAG, "there is an error in the non-first SCAN header information parsed by the decoder.");
     }
-    if (status & JPEG_LL_INTR_UNDET) {
+    if (status & JPEG_LL_INTR_UNDETECT) {
         ESP_LOGE(TAG, "the bitstream of a image is completely read from 2D DMA but the SOS marker is not read");
     }
     if (status & JPEG_LL_INTR_DECODE_TIMEOUT) {

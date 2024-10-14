@@ -1,14 +1,16 @@
 QEMU Emulator
 =============
 
-Espressif maintains a `fork <https://github.com/espressif/qemu>`_ of the QEMU emulator with support for {IDF_TARGET_NAME}. This fork implements emulation of the CPU, memory, and several peripherals of {IDF_TARGET_NAME}. For more information about QEMU for {IDF_TARGET_NAME}, see the `documentation <https://github.com/espressif/esp-toolchain-docs/blob/main/qemu/README.md>`_.
+:link_to_translation:`zh_CN:[中文]`
 
-:doc:`idf.py<idf-py>` allows for running and debugging applications in QEMU. This is a convenient way to test applications without having to flash them to real hardware.
+Espressif maintains a `fork <https://github.com/espressif/qemu>`_ of the QEMU emulator with support for {IDF_TARGET_NAME}. This fork implements emulation of the CPU, memory, and several peripherals of {IDF_TARGET_NAME}. For more information about QEMU for {IDF_TARGET_NAME}, see the `QEMU README documentation <https://github.com/espressif/esp-toolchain-docs/blob/main/qemu/README.md>`_.
+
+:doc:`idf.py <idf-py>` allows for running and debugging applications in QEMU. This is a convenient way to test applications without having to flash them to real hardware.
 
 Prerequisites
 -------------
 
-To use QEMU with ``idf.py`` you first need to install the above-mentioned fork of QEMU. ESP-IDF provides pre-built binaries for x86_64 and arm64 Linux and macOS, as well as x86_64 Windows. Before you use the pre-built binaries on Linux and macOS platroms please install system dependencies:
+To use QEMU with ``idf.py``, you first need to install the above-mentioned fork of QEMU. ESP-IDF provides pre-built binaries for x86_64 and arm64 Linux and macOS, as well as x86_64 Windows. Before you use the pre-built binaries on Linux and macOS platroms please install system dependencies:
 
 - Ubuntu and Debian:
 
@@ -56,7 +58,7 @@ To run an IDF application in QEMU, use the following command:
 
     idf.py qemu monitor
 
-This command builds the application, starts QEMU and opens :doc:`IDF monitor <idf-monitor>`, connecting it to the emulated UART port. You can see the console output of the application and interact with it. IDF Monitor also provides automatic decoding of panic backtraces and UART core dumps.
+This command builds the application, starts QEMU and opens :doc:`IDF monitor <idf-monitor>`, and connects IDF Monitor to the emulated UART port. You can see the console output of the application and interact with it. IDF Monitor also provides automatic decoding of panic backtraces and UART core dumps.
 
 Debugging
 ~~~~~~~~~
@@ -109,3 +111,21 @@ To launch QEMU with a virtual framebuffer device enabled, use the following comm
 When the ``--graphics`` option is used, QEMU opens an additional window where the framebuffer contents are displayed.
 
 To use the virtual framebuffer device in your application, you can add the `espressif/esp_lcd_qemu_rgb <https://components.espressif.com/components/espressif/esp_lcd_qemu_rgb>`_ component to your project. This component provides an esp_lcd compatible driver for the virtual framebuffer device.
+
+Efuse Emulation
+~~~~~~~~~~~~~~~
+
+QEMU supports emulation of eFuses. This can be a convenient way to test security-related features, such as secure boot and flash encryption, without having to perform irreversible operations on real hardware.
+
+You can use :doc:`idf.py<idf-py>` eFuse-related commands to program eFuses. When you run any of these commands together with ``qemu`` command, the eFuses are programmed in QEMU, and the ``qemu_efuse.bin`` file is updated. For example,
+
+.. code-block:: console
+
+    idf.py qemu efuse-burn FLASH_CRYPT_CNT 1
+
+By default, the values of eFuses are read from and written to the ``qemu_efuse.bin`` file in the build directory. You can specify a different file using the ``--efuse-file`` option. For example,
+
+.. code-block:: console
+
+    idf.py qemu --efuse-file my_efuse.bin efuse-burn FLASH_CRYPT_CNT 1
+    idf.py qemu --efuse-file my_efuse.bin monitor

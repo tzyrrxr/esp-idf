@@ -16,6 +16,10 @@
 extern "C" {
 #endif
 
+#define HP_CALI_ACTIVE_DCM_VSET_DEFAULT     27 // For DCDC, about 1.25v
+#define HP_CALI_ACTIVE_DBIAS_DEFAULT        24 // For HP regulator
+#define LP_CALI_DBIAS                       29 // For LP regulator
+
 // FOR  XTAL FORCE PU IN SLEEP
 #define PMU_PD_CUR_SLEEP_ON    0
 #define PMU_BIASSLP_SLEEP_ON   0
@@ -35,6 +39,9 @@ extern "C" {
 #define PMU_DBG_ATTEN_LIGHTSLEEP_DEFAULT    0
 #define PMU_HP_DBIAS_LIGHTSLEEP_0V6 1
 #define PMU_LP_DBIAS_LIGHTSLEEP_0V7 12
+
+// FOR LIGHTSLEEP: XTAL FORCE PU
+#define PMU_DBG_ATTEN_ACTIVE_DEFAULT    0
 
 // FOR DEEPSLEEP
 #define PMU_DBG_HP_DEEPSLEEP    0
@@ -105,7 +112,7 @@ const pmu_lp_system_analog_param_t* pmu_lp_system_analog_param_default(pmu_lp_mo
 typedef union {
     struct {
         uint32_t reserved0    : 21;
-	uint32_t dcdc_switch_pd_en: 1;
+        uint32_t dcdc_switch_pd_en: 1;
         uint32_t mem_dslp     : 1;
         uint32_t mem_pd_en    : 1;
         uint32_t reserved1    : 6;
@@ -153,7 +160,9 @@ typedef union {
 
 typedef struct {
     struct {
-        uint32_t reserved0 : 25;
+        uint32_t reserved0 : 18;
+        uint32_t dcm_vset  : 5;
+        uint32_t dcm_mode  : 2;
         uint32_t xpd_bias  : 1;
         uint32_t dbg_atten : 4;
         uint32_t pd_cur    : 1;
@@ -294,7 +303,7 @@ typedef struct {
             .bod_source_sel = 0,                                            \
             .vddbat_mode    = 0,                                            \
             .peri_pd_en    = ((pd_flags) & PMU_SLEEP_PD_LP_PERIPH) ? 1 : 0, \
-            .mem_dslp      = 1                                              \
+            .mem_dslp      = 0                                              \
         },                                                                  \
         .clk_power = {                                                      \
             .xpd_lppll     = 0,\
@@ -312,9 +321,18 @@ typedef struct {
     pmu_hp_sys_cntl_reg_t   syscntl;
 } pmu_sleep_digital_config_t;
 
+
+#define PMU_SLEEP_DIGITAL_DSLP_CONFIG_DEFAULT(pd_flags) {               \
+    .syscntl = {                                                        \
+        .dig_pad_slp_sel = 0,                                           \
+        .lp_pad_hold_all = (pd_flags & PMU_SLEEP_PD_LP_PERIPH) ? 1 : 0, \
+    }                                                                   \
+}
+
 #define PMU_SLEEP_DIGITAL_LSLP_CONFIG_DEFAULT(pd_flags) {               \
     .syscntl = {                                                        \
-        .dig_pad_slp_sel = ((pd_flags) & PMU_SLEEP_PD_TOP) ? 0 : 1,     \
+        .dig_pad_slp_sel = (pd_flags & PMU_SLEEP_PD_TOP) ? 0 : 1,       \
+        .lp_pad_hold_all = (pd_flags & PMU_SLEEP_PD_LP_PERIPH) ? 1 : 0, \
     }                                                                   \
 }
 
@@ -349,7 +367,7 @@ typedef struct {
     },                                                      \
     .lp_sys[PMU_MODE_LP_SLEEP] = {                          \
         .analog = {                                         \
-            .drv_b         = PMU_LP_DRVB_DEEPSLEEP,                 \
+            .drv_b         = PMU_LP_DRVB_LIGHTSLEEP,                \
             .pd_cur        = PMU_PD_CUR_SLEEP_DEFAULT,              \
             .bias_sleep    = PMU_BIASSLP_SLEEP_DEFAULT,             \
             .slp_xpd       = PMU_LP_SLP_XPD_SLEEP_DEFAULT,          \
@@ -364,8 +382,8 @@ typedef struct {
 #define PMU_SLEEP_ANALOG_DSLP_CONFIG_DEFAULT(pd_flags) {            \
     .hp_sys = {                                                     \
         .analog = {                                                 \
-            .pd_cur        = PMU_PD_CUR_SLEEP_ON,                   \
-            .bias_sleep    = PMU_BIASSLP_SLEEP_ON,                  \
+            .pd_cur        = PMU_PD_CUR_SLEEP_DEFAULT,              \
+            .bias_sleep    = PMU_BIASSLP_SLEEP_DEFAULT,             \
             .xpd           = PMU_HP_XPD_DEEPSLEEP,                  \
             .dbg_atten     = PMU_DBG_HP_DEEPSLEEP                   \
         }                                                           \
@@ -428,7 +446,7 @@ typedef struct {
 
 typedef struct pmu_sleep_machine_constant {
     struct {
-        uint16_t    min_slp_time_us;            /* Mininum sleep protection time (unit: microsecond) */
+        uint16_t    min_slp_time_us;            /* Minimum sleep protection time (unit: microsecond) */
         uint8_t     wakeup_wait_cycle;          /* Modem wakeup signal (WiFi MAC and BEACON wakeup) waits for the slow & fast clock domain synchronization and the wakeup signal triggers the PMU FSM switching wait cycle (unit: slow clock cycle) */
         uint8_t     reserved0;
         uint16_t    reserved1;
@@ -440,7 +458,7 @@ typedef struct pmu_sleep_machine_constant {
         uint16_t    power_up_wait_time_us;      /* (unit: microsecond) */
     } lp;
     struct {
-        uint16_t    min_slp_time_us;            /* Mininum sleep protection time (unit: microsecond) */
+        uint16_t    min_slp_time_us;            /* Minimum sleep protection time (unit: microsecond) */
         uint16_t    clock_domain_sync_time_us;  /* The Slow OSC clock domain synchronizes time with the Fast OSC domain, at least 4 slow clock cycles (unit: microsecond) */
         uint16_t    system_dfs_up_work_time_us; /* System DFS up scaling work time (unit: microsecond) */
         uint16_t    analog_wait_time_us;        /* HP LDO power up wait time (unit: microsecond) */
@@ -461,7 +479,7 @@ typedef struct pmu_sleep_machine_constant {
 // If TOP is power down, the time the regdma runs will cover some of the time
 // spent waiting for the DCDC to startup.
 #define PMU_HP_ANA_WAIT_TIME_PD_TOP_US      260
-// If TOP doamin is not powered down, we need to stay in HP_SWITCH longer to wait for the
+// If TOP domain is not powered down, we need to stay in HP_SWITCH longer to wait for the
 // DCDC startup, which saves more power compared to waiting in the Active state.
 #define PMU_HP_ANA_WAIT_TIME_PU_TOP_US      (PMU_HP_ANA_WAIT_TIME_PD_TOP_US + PMU_REGDMA_S2A_WORK_TIME_US) // 945
 

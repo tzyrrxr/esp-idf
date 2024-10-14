@@ -185,7 +185,7 @@ In the temperature sensor driver, we do not add any protection to ensure the thr
     ETM Event and Task
     ^^^^^^^^^^^^^^^^^^
 
-    Temperature Sensor is able to generate events that can interact with the :doc:`ETM </api-reference/peripherals/etm>` module. The supported events are listed in the :cpp:type:`temperature_sensor_etm_event_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_event` to get the corresponding ETM event handle. The supported tasks are listed in the :cpp:type:`temperature_sensor_etm_task_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_task` to get the corresponding ETM event handle.
+    Temperature Sensor is able to generate events that can interact with the :doc:`ETM </api-reference/peripherals/etm>` module. The supported events are listed in the :cpp:type:`temperature_sensor_etm_event_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_event` to get the corresponding ETM event handle. The supported tasks are listed in the :cpp:type:`temperature_sensor_etm_task_type_t`. You can call :cpp:func:`temperature_sensor_new_etm_task` to get the corresponding ETM task handle.
 
     .. note::
 
@@ -203,13 +203,15 @@ Unexpected Behaviors
     (1) Totally out of range, like 200 °C ~ 300 °C.
     (2) Cross the boundary of each predefined measurement. like 40 °C ~ 110 °C.
 
-Application Example
--------------------
+Application Examples
+--------------------
 
-.. list::
+* :example:`peripherals/temperature_sensor/temp_sensor` demonstrates how to use the built-in temperature sensor, showcasing the measurement range and error based on different DAC levels and offsets.
 
-    * Temperature sensor reading example: :example:`peripherals/temperature_sensor/temp_sensor`.
-    :SOC_TEMPERATURE_SENSOR_INTR_SUPPORT: * Temperature sensor value monitor example: :example:`peripherals/temperature_sensor/temp_sensor_monitor`.
+.. only:: SOC_TEMPERATURE_SENSOR_INTR_SUPPORT
+
+  * :example:`peripherals/temperature_sensor/temp_sensor_monitor` demonstrates how to use the temperature sensor to automatically monitor temperature values continuously, triggering an interrupt when a specific value is reached or when the change between two consecutive samplings is larger/smaller than the settings.
+
 
 API Reference
 ----------------------------------

@@ -1,3 +1,5 @@
+idf_build_get_property(target IDF_TARGET)
+
 set(srcs)
 set(public_include "include")
 
@@ -13,9 +15,21 @@ if(CONFIG_SOC_JPEG_CODEC_SUPPORTED)
                         "jpeg_decode.c"
         )
     endif()
+    if(CONFIG_SOC_JPEG_ENCODE_SUPPORTED)
+        list(APPEND srcs
+                        "jpeg_emit_marker.c"
+                        "jpeg_encode.c"
+        )
+    endif()
+endif()
+
+if(${target} STREQUAL "linux")
+    set(priv_requires "")
+else()
+    set(priv_requires esp_mm esp_pm)
 endif()
 
 idf_component_register(SRCS ${srcs}
                        INCLUDE_DIRS ${public_include}
-                       PRIV_REQUIRES "esp_mm" "esp_pm"
+                       PRIV_REQUIRES "${priv_requires}"
                       )

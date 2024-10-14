@@ -30,16 +30,12 @@
 #define PCNT_CTRL_VCC_IO 1
 #define PCNT_CTRL_GND_IO 0
 #else
-#define PULSE_IO 12
+#define PULSE_IO 0
 #define PCNT_INPUT_IO 4
 #define PCNT_CTRL_VCC_IO 5
 #define PCNT_CTRL_GND_IO 2
 #endif
 
-#define HIGHEST_LIMIT 10
-#define LOWEST_LIMIT 0
-#define MAX_THRESHOLD 5
-#define MIN_THRESHOLD 0
 #define PCNT_CTRL_HIGH_LEVEL 1
 #define PCNT_CTRL_LOW_LEVEL 0
 
@@ -407,9 +403,10 @@ TEST_CASE("PCNT_basic_function_test", "[pcnt]")
 
     // use LEDC to produce the pulse, then the PCNT to count it
     produce_pulse();
+    vTaskDelay(10 / portTICK_PERIOD_MS);  // ensure LEDC is working
     pcnt_test_io_config(PCNT_CTRL_HIGH_LEVEL);
 
-    // initialize first, the initail value should be 0
+    // initialize first, the initial value should be 0
     TEST_ESP_OK(pcnt_counter_pause(PCNT_UNIT_0));
     TEST_ESP_OK(pcnt_counter_clear(PCNT_UNIT_0));
     TEST_ESP_OK(pcnt_get_counter_value(PCNT_UNIT_0, &test_counter));
@@ -511,7 +508,7 @@ TEST_CASE("PCNT_interrupt_method_test_control_IO_high", "[pcnt][timeout=120]")
     TEST_ESP_OK(pcnt_event_enable(PCNT_UNIT_0, PCNT_EVT_H_LIM));  // when arrive to max limit trigger
     TEST_ESP_OK(pcnt_event_enable(PCNT_UNIT_0, PCNT_EVT_L_LIM));  // when arrive to minimum limit trigger
 
-    // initialize first, the initail value should be 0
+    // initialize first, the initial value should be 0
     TEST_ESP_OK(pcnt_counter_pause(PCNT_UNIT_0));
     TEST_ESP_OK(pcnt_counter_clear(PCNT_UNIT_0));
 

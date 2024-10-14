@@ -23,6 +23,7 @@
 #include "freertos/semphr.h"
 #include "freertos/timers.h"
 #include "freertos/ringbuf.h"
+#include "esp_private/esp_clk_tree_common.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/adc_private.h"
 #include "esp_private/adc_share_hw_ctrl.h"
@@ -33,10 +34,15 @@
 #include "hal/adc_types.h"
 #include "hal/adc_hal.h"
 #include "hal/dma_types.h"
+#include "soc/soc_caps.h"
 #include "esp_memory_utils.h"
 #include "adc_continuous_internal.h"
 #include "esp_private/adc_dma.h"
 #include "adc_dma_internal.h"
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+#include "esp_cache.h"
+#include "esp_private/esp_cache_private.h"
+#endif
 
 static const char *ADC_TAG = "adc_continuous";
 
@@ -66,6 +72,12 @@ static IRAM_ATTR bool adc_dma_intr(adc_continuous_ctx_t *adc_digi_ctx)
         if (status != ADC_HAL_DMA_DESC_VALID) {
             break;
         }
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+        else {
+            esp_err_t msync_ret = esp_cache_msync((void *)finished_buffer, finished_size, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+            assert(msync_ret == ESP_OK);
+        }
+#endif
 
         ret = xRingbufferSendFromISR(adc_digi_ctx->ringbuf_hdl, finished_buffer, finished_size, &taskAwoken);
         need_yield |= (taskAwoken == pdTRUE);
@@ -86,7 +98,7 @@ static IRAM_ATTR bool adc_dma_intr(adc_continuous_ctx_t *adc_digi_ctx)
                 uint8_t *old_data = xRingbufferReceiveUpToFromISR(adc_digi_ctx->ringbuf_hdl, &actual_size, adc_digi_ctx->ringbuf_size);
                 /**
                  * Replace by ringbuffer reset API when this API is ready.
-                 * Now we do mannual reset.
+                 * Now we do manual reset.
                  * For old_data == NULL condition (equals to the future ringbuffer reset fail condition), we don't care this time data,
                  * as this only happens when the ringbuffer size is small, new data will be filled in soon.
                  */
@@ -108,7 +120,10 @@ static IRAM_ATTR bool adc_dma_intr(adc_continuous_ctx_t *adc_digi_ctx)
             }
         }
     }
-
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    esp_err_t msync_ret = esp_cache_msync((void *)(adc_digi_ctx->hal.rx_desc), adc_digi_ctx->adc_desc_size, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+    assert(msync_ret == ESP_OK);
+#endif
     return need_yield;
 }
 
@@ -178,7 +193,7 @@ esp_err_t adc_continuous_new_handle(const adc_continuous_handle_cfg_t *hdl_confi
     }
 
     //malloc internal buffer used by DMA
-    adc_ctx->rx_dma_buf = heap_caps_calloc(1, hdl_config->conv_frame_size * INTERNAL_BUF_NUM, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    adc_ctx->rx_dma_buf = heap_caps_calloc(INTERNAL_BUF_NUM, hdl_config->conv_frame_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (!adc_ctx->rx_dma_buf) {
         ret = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -187,7 +202,7 @@ esp_err_t adc_continuous_new_handle(const adc_continuous_handle_cfg_t *hdl_confi
     //malloc dma descriptor
     uint32_t dma_desc_num_per_frame = (hdl_config->conv_frame_size + DMA_DESCRIPTOR_BUFFER_MAX_SIZE_4B_ALIGNED - 1) / DMA_DESCRIPTOR_BUFFER_MAX_SIZE_4B_ALIGNED;
     uint32_t dma_desc_max_num = dma_desc_num_per_frame * INTERNAL_BUF_NUM;
-    adc_ctx->hal.rx_desc = heap_caps_calloc(1, (sizeof(dma_descriptor_t)) * dma_desc_max_num, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+    adc_ctx->hal.rx_desc = heap_caps_aligned_calloc(ADC_DMA_DESC_ALIGN, dma_desc_max_num, sizeof(dma_descriptor_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
     if (!adc_ctx->hal.rx_desc) {
         ret = ESP_ERR_NO_MEM;
         goto cleanup;
@@ -245,7 +260,9 @@ esp_err_t adc_continuous_start(adc_continuous_handle_t handle)
     ESP_RETURN_ON_FALSE(handle->fsm == ADC_FSM_INIT, ESP_ERR_INVALID_STATE, ADC_TAG, "ADC continuous mode isn't in the init state, it's started already");
 
     //reset ADC digital part to reset ADC sampling EOF counter
-    periph_module_reset(PERIPH_SARADC_MODULE);
+    ADC_BUS_CLK_ATOMIC() {
+        adc_ll_reset_register();
+    }
 
     if (handle->pm_lock) {
         ESP_RETURN_ON_ERROR(esp_pm_lock_acquire(handle->pm_lock), ADC_TAG, "acquire pm_lock failed");
@@ -285,7 +302,9 @@ esp_err_t adc_continuous_start(adc_continuous_handle_t handle)
     }
 
     adc_hal_digi_init(&handle->hal);
-
+#if !CONFIG_IDF_TARGET_ESP32
+    esp_clk_tree_enable_src((soc_module_clk_t)(handle->hal_digi_ctrlr_cfg.clk_src), true);
+#endif
     adc_hal_digi_controller_config(&handle->hal, &handle->hal_digi_ctrlr_cfg);
     adc_hal_digi_enable(false);
 
@@ -295,6 +314,10 @@ esp_err_t adc_continuous_start(adc_continuous_handle_t handle)
     adc_dma_reset(handle->adc_dma);
     adc_hal_digi_reset();
     adc_hal_digi_dma_link(&handle->hal, handle->rx_dma_buf);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+    esp_err_t ret = esp_cache_msync(handle->hal.rx_desc, handle->adc_desc_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+    assert(ret == ESP_OK);
+#endif
 
     adc_dma_start(handle->adc_dma, handle->hal.rx_desc);
     adc_hal_digi_connect(true);
@@ -526,12 +549,12 @@ esp_err_t adc_continuous_flush_pool(adc_continuous_handle_t handle)
     return ESP_OK;
 }
 
-esp_err_t adc_continuous_io_to_channel(int io_num, adc_unit_t * const unit_id, adc_channel_t * const channel)
+esp_err_t adc_continuous_io_to_channel(int io_num, adc_unit_t *const unit_id, adc_channel_t *const channel)
 {
     return adc_io_to_channel(io_num, unit_id, channel);
 }
 
-esp_err_t adc_continuous_channel_to_io(adc_unit_t unit_id, adc_channel_t channel, int * const io_num)
+esp_err_t adc_continuous_channel_to_io(adc_unit_t unit_id, adc_channel_t channel, int *const io_num)
 {
     return adc_channel_to_io(unit_id, channel, io_num);
 }

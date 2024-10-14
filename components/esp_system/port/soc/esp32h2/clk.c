@@ -37,11 +37,11 @@
 #include "hal/mcpwm_ll.h"
 #include "hal/parlio_ll.h"
 #include "hal/gdma_ll.h"
+#include "hal/pau_ll.h"
 #include "hal/spi_ll.h"
 #include "hal/clk_gate_ll.h"
 #include "hal/temperature_sensor_ll.h"
 #include "hal/usb_serial_jtag_ll.h"
-#include "hal/usb_fsls_phy_ll.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/esp_clk.h"
 #include "esp_private/esp_pmu.h"
@@ -58,14 +58,26 @@
 #define MHZ (1000000)
 
 static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src);
+static __attribute__((unused)) void recalib_bbpll(void);
 
 static const char *TAG = "clk";
+
+void esp_rtc_init(void)
+{
+#if CONFIG_ESP_SYSTEM_BBPLL_RECALIB
+    // In earlier version of ESP-IDF, the PLL provided by bootloader is not stable enough.
+    // Do calibration again here so that we can use better clock for the timing tuning.
+    recalib_bbpll();
+#endif
+
+#if !CONFIG_IDF_ENV_FPGA
+    pmu_init();
+#endif
+}
 
 __attribute__((weak)) void esp_clk_init(void)
 {
 #if !CONFIG_IDF_ENV_FPGA
-    pmu_init();
-
     assert(rtc_clk_xtal_freq_get() == SOC_XTAL_FREQ_32M);
 
     rtc_clk_8m_enable(true);
@@ -118,7 +130,9 @@ __attribute__((weak)) void esp_clk_init(void)
 
     // Wait for UART TX to finish, otherwise some UART output will be lost
     // when switching APB frequency
-    esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    if (CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM != -1) {
+        esp_rom_output_tx_wait_idle(CONFIG_ESP_CONSOLE_ROM_SERIAL_PORT_NUM);
+    }
 
     if (res)  {
         rtc_clk_cpu_freq_set_config(&new_config);
@@ -126,9 +140,6 @@ __attribute__((weak)) void esp_clk_init(void)
 
     // Re calculate the ccount to make time calculation correct.
     esp_cpu_set_cycle_count((uint64_t)esp_cpu_get_cycle_count() * new_freq_mhz / old_freq_mhz);
-
-    // Set crypto clock (`clk_sec`) to use 96M PLL clock
-    REG_SET_FIELD(PCR_SEC_CONF_REG, PCR_SEC_CLK_SEL, 0x3);
 }
 
 static void select_rtc_slow_clk(soc_rtc_slow_clk_src_t rtc_slow_clk_src)
@@ -208,8 +219,9 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     esp_sleep_pd_config(pu_domain, ESP_PD_OPTION_ON);
 
     soc_reset_reason_t rst_reason = esp_rom_get_reset_reason(0);
-    if (rst_reason != RESET_REASON_CPU0_MWDT0 && rst_reason != RESET_REASON_CPU0_MWDT1      \
-            && rst_reason != RESET_REASON_CPU0_SW && rst_reason != RESET_REASON_CPU0_RTC_WDT) {
+    if ((rst_reason != RESET_REASON_CPU0_MWDT0) && (rst_reason != RESET_REASON_CPU0_MWDT1)      \
+            && (rst_reason != RESET_REASON_CPU0_SW) && (rst_reason != RESET_REASON_CPU0_RTC_WDT)    \
+            && (rst_reason != RESET_REASON_CPU0_JTAG)) {
 #if CONFIG_ESP_CONSOLE_UART_NUM != 0
         uart_ll_enable_bus_clock(UART_NUM_0, false);
 #elif CONFIG_ESP_CONSOLE_UART_NUM != 1
@@ -240,16 +252,16 @@ __attribute__((weak)) void esp_perip_clk_init(void)
         parlio_ll_tx_enable_clock(&PARL_IO, false);
         parlio_ll_enable_bus_clock(0, false);
         gdma_ll_force_enable_reg_clock(&GDMA, false);
-        gdma_ll_enable_bus_clock(0, false);
+        _gdma_ll_enable_bus_clock(0, false);
 #if CONFIG_APP_BUILD_TYPE_PURE_RAM_APP
         spi_ll_enable_bus_clock(SPI1_HOST, false);
 #endif
         spi_ll_enable_bus_clock(SPI2_HOST, false);
         temperature_sensor_ll_bus_clk_enable(false);
+        pau_ll_enable_bus_clock(false);
 
         periph_ll_disable_clk_set_rst(PERIPH_UHCI0_MODULE);
         periph_ll_disable_clk_set_rst(PERIPH_SARADC_MODULE);
-        periph_ll_disable_clk_set_rst(PERIPH_REGDMA_MODULE);
 #if !CONFIG_ESP_SYSTEM_HW_PC_RECORD
         /* Disable ASSIST Debug module clock if PC recoreding function is not used,
          * if stack guard function needs it, it will be re-enabled at esp_hw_stack_guard_init */
@@ -273,17 +285,35 @@ __attribute__((weak)) void esp_perip_clk_init(void)
 
 #if !CONFIG_USJ_ENABLE_USB_SERIAL_JTAG && !CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED
         // Disable USB-Serial-JTAG clock and it's pad if not used
-        usb_fsls_phy_ll_int_jtag_disable(&USB_SERIAL_JTAG);
+        usb_serial_jtag_ll_phy_enable_pad(false);
         usb_serial_jtag_ll_enable_bus_clock(false);
 #endif
     }
 
-    if (rst_reason == RESET_REASON_CHIP_POWER_ON || rst_reason == RESET_REASON_CHIP_BROWN_OUT \
-            || rst_reason == RESET_REASON_SYS_RTC_WDT || rst_reason == RESET_REASON_SYS_SUPER_WDT) {
+    if ((rst_reason == RESET_REASON_CHIP_POWER_ON) || (rst_reason == RESET_REASON_CHIP_BROWN_OUT) \
+            || (rst_reason == RESET_REASON_SYS_RTC_WDT) || (rst_reason == RESET_REASON_SYS_SUPER_WDT)) {
         _lp_clkrst_ll_enable_rng_clock(false);
         CLEAR_PERI_REG_MASK(LPPERI_CLK_EN_REG, LPPERI_OTP_DBG_CK_EN);
         CLEAR_PERI_REG_MASK(LPPERI_CLK_EN_REG, LPPERI_LP_ANA_I2C_CK_EN);
         CLEAR_PERI_REG_MASK(LPPERI_CLK_EN_REG, LPPERI_LP_IO_CK_EN);
         WRITE_PERI_REG(LP_CLKRST_LP_CLK_PO_EN_REG, 0);
+    }
+}
+
+// Workaround for bootloader not calibrated well issue.
+// Placed in IRAM because disabling BBPLL may influence the cache
+static void IRAM_ATTR NOINLINE_ATTR recalib_bbpll(void)
+{
+    rtc_cpu_freq_config_t old_config;
+    rtc_clk_cpu_freq_get_config(&old_config);
+
+    // There are two paths we arrive here: 1. CPU reset. 2. Other reset reasons.
+    // - For other reasons, the bootloader will set CPU source to BBPLL and enable it. But there are calibration issues.
+    //   Turn off the BBPLL and do calibration again to fix the issue. Flash_PLL comes from the same source as PLL.
+    // - For CPU reset, the CPU source will be set to XTAL, while the BBPLL is kept to meet USB Serial JTAG's
+    //   requirements. In this case, we don't touch BBPLL to avoid USJ disconnection.
+    if (old_config.source == SOC_CPU_CLK_SRC_PLL || old_config.source == SOC_CPU_CLK_SRC_FLASH_PLL) {
+        rtc_clk_cpu_freq_set_xtal();
+        rtc_clk_cpu_freq_set_config(&old_config);
     }
 }

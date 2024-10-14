@@ -20,27 +20,8 @@
 #include "esp_attr.h"
 #include "soc/soc_caps.h"
 #include "esp_rom_caps.h"
+#include "esp_rom_libc_stubs.h"
 #include "esp_private/startup_internal.h"
-
-#if CONFIG_IDF_TARGET_ESP32
-#include "esp32/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32S2
-#include "esp32s2/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32S3
-#include "esp32s3/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32C3
-#include "esp32c3/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32C2
-#include "esp32c2/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32C6
-#include "esp32c6/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32C5
-#include "esp32c5/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32H2
-#include "esp32h2/rom/libc_stubs.h"
-#elif CONFIG_IDF_TARGET_ESP32P4
-#include "esp32p4/rom/libc_stubs.h"
-#endif
 
 extern int _printf_float(struct _reent *rptr,
                          void *pdata,
@@ -155,13 +136,8 @@ void esp_newlib_init(void)
     syscall_table_ptr = &s_stub_table;
 #endif
 
-#if __NEWLIB__ > 4 || ( __NEWLIB__ == 4 && __NEWLIB_MINOR__ > 1 ) /* TODO: IDF-8134 */
     memset(&__sglue, 0, sizeof(__sglue));
     _global_impure_ptr = _GLOBAL_REENT;
-#else
-    static struct _reent s_reent;
-    _GLOBAL_REENT = &s_reent;
-#endif
 
     /* Ensure that the initialization of sfp is prevented until esp_newlib_init_global_stdio() is explicitly invoked. */
     _GLOBAL_REENT->__cleanup = esp_cleanup_r;
@@ -224,7 +200,7 @@ void esp_newlib_init_global_stdio(const char *stdio_dev)
 
 ESP_SYSTEM_INIT_FN(init_newlib_stdio, CORE, BIT(0), 115)
 {
-#if defined(CONFIG_VFS_SUPPORT_IO) && !defined(CONFIG_ESP_CONSOLE_NONE)
+#if defined(CONFIG_VFS_SUPPORT_IO)
     esp_newlib_init_global_stdio("/dev/console");
 #else
     esp_newlib_init_global_stdio(NULL);

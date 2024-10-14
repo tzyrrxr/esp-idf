@@ -10,10 +10,15 @@ endif()
 
 set(requires soc)
 # only esp_hw_support/adc_share_hw_ctrl.c requires efuse component
-set(priv_requires efuse spi_flash bootloader_support)
+# TODO: remove esp_security from REQUIRES in ESP-IDF v6.0 (see IDF-10733)
+set(priv_requires efuse spi_flash bootloader_support esp_security)
 
 if(${target} STREQUAL "esp32c6")
     list(APPEND priv_requires hal)
+endif()
+
+if(CONFIG_RTC_CLK_SRC_INT_RC32K)
+    message(WARNING "Internal RC32K clock is unstable at extreme temperatures and is not recommended for use.")
 endif()
 
 set(srcs "cpu.c" "port/${IDF_TARGET}/esp_cpu_intr.c" "esp_memory_utils.c" "port/${IDF_TARGET}/cpu_region_protect.c")
@@ -26,11 +31,11 @@ if(NOT BOOTLOADER_BUILD)
                      "periph_ctrl.c"
                      "revision.c"
                      "rtc_module.c"
+                     "sleep_modem.c"
                      "sleep_modes.c"
                      "sleep_console.c"
                      "sleep_gpio.c"
                      "sleep_event.c"
-                     "sleep_modem.c"
                      "regi2c_ctrl.c"
                      "esp_gpio_reserve.c"
                      "sar_periph_ctrl_common.c"
@@ -38,6 +43,7 @@ if(NOT BOOTLOADER_BUILD)
                      "port/${target}/esp_clk_tree.c"
                      "port/esp_clk_tree_common.c"
                      "dma/esp_dma_utils.c"
+                     "dma/gdma_link.c"
                      "spi_share_hw_ctrl.c"
                      "spi_bus_lock.c")
 
@@ -48,13 +54,10 @@ if(NOT BOOTLOADER_BUILD)
     if(CONFIG_SOC_ISP_SHARE_CSI_BRG)
         list(APPEND srcs "mipi_csi_share_hw_ctrl.c")
     endif()
-
-    if(CONFIG_SOC_PM_SUPPORT_CPU_PD)
-        list(APPEND srcs "sleep_cpu.c")
-    endif()
-
     if(CONFIG_SOC_PAU_SUPPORTED)
-        list(APPEND srcs "sleep_retention.c"  "sleep_system_peripheral.c" "sleep_clock.c")
+        list(APPEND srcs "sleep_retention.c"
+                         "sleep_system_peripheral.c"
+                         )
     endif()
 
     # [refactor-todo]
@@ -69,20 +72,24 @@ if(NOT BOOTLOADER_BUILD)
     endif()
 
     if(CONFIG_SOC_GDMA_SUPPORTED)
-        list(APPEND srcs "dma/gdma.c")
-        if(CONFIG_SOC_GDMA_SUPPORT_SLEEP_RETENTION)
+        list(APPEND srcs "dma/gdma.c" "deprecated/gdma_legacy.c")
+        if(CONFIG_SOC_GDMA_SUPPORT_SLEEP_RETENTION AND CONFIG_SOC_PAU_SUPPORTED)
             list(APPEND srcs "dma/gdma_sleep_retention.c")
         endif()
         if(CONFIG_SOC_GDMA_SUPPORT_ETM)
             list(APPEND srcs "dma/gdma_etm.c")
         endif()
+        if(CONFIG_SOC_GDMA_SUPPORT_CRC)
+            list(APPEND srcs "dma/gdma_crc.c")
+        endif()
     endif()
 
-    if(CONFIG_SOC_MULTI_USAGE_LDO_SUPPORTED)
-        list(APPEND srcs "ldo/esp_ldo.c")
-        if(CONFIG_SPIRAM OR CONFIG_SOC_CLK_MPLL_SUPPORTED)
-            list(APPEND srcs "ldo/esp_ldo_psram.c")
-        endif()
+    if(CONFIG_SOC_GP_LDO_SUPPORTED)
+        list(APPEND srcs "ldo/esp_ldo_regulator.c")
+    endif()
+
+    if(CONFIG_SOC_DEBUG_PROBE_SUPPORTED)
+        list(APPEND srcs "debug_probe/debug_probe.c")
     endif()
 
     if(CONFIG_SOC_ASYNC_MEMCPY_SUPPORTED)
@@ -107,37 +114,13 @@ if(NOT BOOTLOADER_BUILD)
         list(APPEND srcs "port/${target}/systimer.c")
     endif()
 
-    if(CONFIG_SOC_HMAC_SUPPORTED)
-        list(APPEND srcs "esp_hmac.c")
-    endif()
-
     if(CONFIG_SOC_ETM_SUPPORTED)
         list(APPEND srcs "esp_etm.c")
-    endif()
-
-    if(CONFIG_SOC_CRYPTO_DPA_PROTECTION_SUPPORTED)
-        list(APPEND srcs "esp_dpa_protection.c")
-    endif()
-
-    if(CONFIG_SOC_DIG_SIGN_SUPPORTED)
-        list(APPEND srcs "esp_ds.c")
-    endif()
-
-    if(CONFIG_SOC_KEY_MANAGER_SUPPORTED)
-        list(APPEND srcs "esp_key_mgr.c")
     endif()
 
     if(CONFIG_SOC_PAU_SUPPORTED)
         list(APPEND srcs "port/pau_regdma.c"
                          "port/regdma_link.c")
-    endif()
-
-    if(CONFIG_SOC_PM_CPU_RETENTION_BY_SW)
-        list(APPEND srcs "sleep_cpu_asm.S")
-        set_property(TARGET ${COMPONENT_LIB}
-                    APPEND PROPERTY INTERFACE_LINK_LIBRARIES "-u rv_core_critical_regs_save")
-        set_property(TARGET ${COMPONENT_LIB}
-                    APPEND PROPERTY INTERFACE_LINK_LIBRARIES "-u rv_core_critical_regs_restore")
     endif()
 
     if(CONFIG_SOC_MODEM_CLOCK_IS_INDEPENDENT AND CONFIG_SOC_MODEM_CLOCK_SUPPORTED)
@@ -154,49 +137,42 @@ if(NOT BOOTLOADER_BUILD)
         endif()
     endif()
 
-    if(CONFIG_SOC_RTC_FAST_MEM_SUPPORTED)
+    if(CONFIG_SOC_RTC_FAST_MEM_SUPPORTED AND CONFIG_ESP_ROM_SUPPORT_DEEP_SLEEP_WAKEUP_STUB)
         list(APPEND srcs "sleep_wake_stub.c")
     endif()
 
     if(CONFIG_SOC_GPIO_CLOCKOUT_BY_GPIO_MATRIX OR CONFIG_SOC_GPIO_CLOCKOUT_BY_IO_MUX)
         list(APPEND srcs "esp_clock_output.c")
     endif()
-
-    if(CONFIG_IDF_TARGET_ESP32P4)
-        list(REMOVE_ITEM srcs
-                "sleep_cpu.c"         # TODO: IDF-7528, IDF-7529
-                "sleep_wake_stub.c"   # TODO: IDF-7529
-            )
-    endif()
-    if(CONFIG_IDF_TARGET_ESP32C5)
-        list(REMOVE_ITEM srcs
-                "sleep_cpu.c"         # TODO: [ESP32C5] IDF-8638, IDF-8640
-                "sleep_modes.c"       # TODO: [ESP32C5] IDF-8638, IDF-8640
-                "sleep_wake_stub.c"   # TODO: [ESP32C5] IDF-8638, IDF-8640
-                "sleep_gpio.c"        # TODO: [ESP32C5] IDF-8638, IDF-8640
-                "port/esp_clk_tree_common.c"    # TODO: [ESP32C5] IDF-8638, IDF-8640
-            )
-    endif()
 else()
     # Requires "_esp_error_check_failed()" function
     list(APPEND priv_requires "esp_system")
 endif()
 
+set(public_include_dirs "include" "include/soc" "include/soc/${target}"
+                        "dma/include" "ldo/include" "debug_probe/include")
+
 idf_component_register(SRCS ${srcs}
-                       INCLUDE_DIRS include include/soc include/soc/${target} dma/include
+                       INCLUDE_DIRS ${public_include_dirs}
                        PRIV_INCLUDE_DIRS port/include include/esp_private
                        REQUIRES ${requires}
                        PRIV_REQUIRES "${priv_requires}"
-                       LDFRAGMENTS linker.lf dma/linker.lf)
+                       LDFRAGMENTS linker.lf dma/linker.lf ldo/linker.lf)
 
 idf_build_get_property(target IDF_TARGET)
 add_subdirectory(port/${target})
+add_subdirectory(lowpower)
+
+if(CONFIG_COMPILER_STATIC_ANALYZER AND CMAKE_C_COMPILER_ID STREQUAL "GNU") # TODO IDF-10229
+    target_compile_options(${COMPONENT_LIB} PRIVATE "-fno-analyzer")
+endif()
+
+if(CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND OR CONFIG_PM_SLP_DISABLE_GPIO)
+    target_link_libraries(${COMPONENT_LIB} INTERFACE "-u esp_sleep_gpio_include")
+endif()
 
 if(NOT BOOTLOADER_BUILD)
     if(CONFIG_SPIRAM)
         idf_component_optional_requires(PRIVATE esp_psram)
-    endif()
-    if(CONFIG_SOC_CRYPTO_DPA_PROTECTION_SUPPORTED)
-        target_link_libraries(${COMPONENT_LIB} PRIVATE "-u esp_crypto_dpa_prot_include_impl")
     endif()
 endif()

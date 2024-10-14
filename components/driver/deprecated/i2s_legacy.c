@@ -22,6 +22,7 @@
 
 #include "soc/lldesc.h"
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
 #include "hal/gpio_hal.h"
 #include "driver/i2s_types_legacy.h"
 #include "hal/i2s_hal.h"
@@ -61,7 +62,6 @@
 #include "esp_pm.h"
 #include "esp_efuse.h"
 #include "esp_rom_gpio.h"
-#include "esp_dma_utils.h"
 
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 #include "esp_cache.h"
@@ -348,14 +348,22 @@ static esp_err_t i2s_dma_intr_init(i2s_port_t i2s_num, int intr_flag)
     gdma_trigger_t trig = {.periph = GDMA_TRIG_PERIPH_I2S};
 
     switch (i2s_num) {
+#if SOC_I2S_NUM > 2
+    case I2S_NUM_2:
+        trig.instance_id = SOC_GDMA_TRIG_PERIPH_I2S2;
+        break;
+#endif
 #if SOC_I2S_NUM > 1
     case I2S_NUM_1:
         trig.instance_id = SOC_GDMA_TRIG_PERIPH_I2S1;
         break;
 #endif
-    default:
+    case I2S_NUM_0:
         trig.instance_id = SOC_GDMA_TRIG_PERIPH_I2S0;
         break;
+    default:
+        ESP_LOGE(TAG, "Unsupported I2S port number");
+        return ESP_ERR_NOT_SUPPORTED;
     }
 
     /* Set GDMA config */
@@ -363,7 +371,7 @@ static esp_err_t i2s_dma_intr_init(i2s_port_t i2s_num, int intr_flag)
     if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
         dma_cfg.direction = GDMA_CHANNEL_DIRECTION_TX;
         /* Register a new GDMA tx channel */
-        ESP_RETURN_ON_ERROR(gdma_new_channel(&dma_cfg, &p_i2s[i2s_num]->tx_dma_chan), TAG, "Register tx dma channel error");
+        ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_cfg, &p_i2s[i2s_num]->tx_dma_chan), TAG, "Register tx dma channel error");
         ESP_RETURN_ON_ERROR(gdma_connect(p_i2s[i2s_num]->tx_dma_chan, trig), TAG, "Connect tx dma channel error");
         gdma_tx_event_callbacks_t cb = {.on_trans_eof = i2s_dma_tx_callback};
         /* Set callback function for GDMA, the interrupt is triggered by GDMA, then the GDMA ISR will call the  callback function */
@@ -372,7 +380,7 @@ static esp_err_t i2s_dma_intr_init(i2s_port_t i2s_num, int intr_flag)
     if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
         dma_cfg.direction = GDMA_CHANNEL_DIRECTION_RX;
         /* Register a new GDMA rx channel */
-        ESP_RETURN_ON_ERROR(gdma_new_channel(&dma_cfg, &p_i2s[i2s_num]->rx_dma_chan), TAG, "Register rx dma channel error");
+        ESP_RETURN_ON_ERROR(gdma_new_ahb_channel(&dma_cfg, &p_i2s[i2s_num]->rx_dma_chan), TAG, "Register rx dma channel error");
         ESP_RETURN_ON_ERROR(gdma_connect(p_i2s[i2s_num]->rx_dma_chan, trig), TAG, "Connect rx dma channel error");
         gdma_rx_event_callbacks_t cb = {.on_recv_eof = i2s_dma_rx_callback};
         /* Set callback function for GDMA, the interrupt is triggered by GDMA, then the GDMA ISR will call the  callback function */
@@ -534,7 +542,7 @@ static inline uint32_t i2s_get_buf_size(i2s_port_t i2s_num)
         }
     }
     if (bufsize / bytes_per_frame != p_i2s[i2s_num]->dma_frame_num) {
-        ESP_LOGW(TAG, "dma frame num is adjusted to %"PRIu32" to algin the dma buffer with %"PRIu32
+        ESP_LOGW(TAG, "dma frame num is adjusted to %"PRIu32" to align the dma buffer with %"PRIu32
                  ", bufsize = %"PRIu32, bufsize / bytes_per_frame, alignment, bufsize);
     }
 #else
@@ -572,17 +580,17 @@ static esp_err_t i2s_alloc_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
     ESP_GOTO_ON_FALSE(dma_obj, ESP_ERR_INVALID_ARG, err, TAG, "I2S DMA object can't be NULL");
 
     uint32_t buf_cnt = p_i2s[i2s_num]->dma_desc_num;
-    size_t desc_size = 0;
     for (int cnt = 0; cnt < buf_cnt; cnt++) {
         /* Allocate DMA buffer */
-        esp_dma_calloc(1, sizeof(char) * dma_obj->buf_size, (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA), (void **)&dma_obj->buf[cnt], NULL);
+        dma_obj->buf[cnt] = heap_caps_aligned_calloc(4, 1, sizeof(char) * dma_obj->buf_size,
+                                                     MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         ESP_GOTO_ON_FALSE(dma_obj->buf[cnt], ESP_ERR_NO_MEM, err, TAG, "Error malloc dma buffer");
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
         esp_cache_msync(dma_obj->buf[cnt], dma_obj->buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 #endif
 
         /* Allocate DMA descriptor */
-        esp_dma_calloc(1, sizeof(lldesc_t), MALLOC_CAP_DEFAULT, (void **)&dma_obj->desc[cnt], &desc_size);
+        dma_obj->desc[cnt] = heap_caps_aligned_calloc(4, 1, sizeof(lldesc_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         ESP_GOTO_ON_FALSE(dma_obj->desc[cnt], ESP_ERR_NO_MEM, err, TAG,  "Error malloc dma description entry");
     }
     /* DMA descriptor must be initialize after all descriptor has been created, otherwise they can't be linked together as a chain */
@@ -598,7 +606,7 @@ static esp_err_t i2s_alloc_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
         /* Link to the next descriptor */
         dma_obj->desc[cnt]->empty = (uint32_t)((cnt < (buf_cnt - 1)) ? (dma_obj->desc[cnt + 1]) : dma_obj->desc[0]);
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-        esp_cache_msync(dma_obj->desc[cnt], desc_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+        esp_cache_msync(dma_obj->desc[cnt], sizeof(lldesc_t), ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
 #endif
     }
     if (p_i2s[i2s_num]->dir & I2S_DIR_RX) {
@@ -626,7 +634,7 @@ static esp_err_t i2s_realloc_dma_buffer(i2s_port_t i2s_num, i2s_dma_t *dma_obj)
 
 static esp_err_t i2s_destroy_dma_object(i2s_port_t i2s_num, i2s_dma_t **dma)
 {
-    /* Check if DMA truely need destroy */
+    /* Check if DMA truly need destroy */
     ESP_RETURN_ON_FALSE(p_i2s[i2s_num], ESP_ERR_INVALID_ARG, TAG, "I2S not initialized yet");
     if (!(*dma)) {
         return ESP_OK;
@@ -662,7 +670,7 @@ static esp_err_t i2s_create_dma_object(i2s_port_t i2s_num, i2s_dma_t **dma)
     /* Allocate new DMA structure */
     *dma = (i2s_dma_t *) calloc(1, sizeof(i2s_dma_t));
     ESP_RETURN_ON_FALSE(*dma, ESP_ERR_NO_MEM, TAG, "DMA object allocate failed");
-    /* Allocate DMA buffer poiter */
+    /* Allocate DMA buffer pointer */
     (*dma)->buf = (char **)heap_caps_calloc(buf_cnt, sizeof(char *), MALLOC_CAP_DMA);
     if (!(*dma)->buf) {
         goto err;
@@ -1536,7 +1544,7 @@ static esp_err_t i2s_init_legacy(i2s_port_t i2s_num, int intr_alloc_flag)
 
     i2s_set_slot_legacy(i2s_num);
     i2s_set_clock_legacy(i2s_num);
-    ESP_RETURN_ON_ERROR(i2s_dma_intr_init(i2s_num, intr_alloc_flag), TAG, "I2S interrupt initailze failed");
+    ESP_RETURN_ON_ERROR(i2s_dma_intr_init(i2s_num, intr_alloc_flag), TAG, "I2S interrupt initialize failed");
     ESP_RETURN_ON_ERROR(i2s_dma_object_init(i2s_num), TAG, "I2S dma object create failed");
     if (p_i2s[i2s_num]->dir & I2S_DIR_TX) {
         ESP_RETURN_ON_ERROR(i2s_realloc_dma_buffer(i2s_num, p_i2s[i2s_num]->tx), TAG, "Allocate I2S dma tx buffer failed");
@@ -1629,7 +1637,7 @@ esp_err_t i2s_driver_uninstall(i2s_port_t i2s_num)
     }
 #endif
     /* Disable module clock */
-    i2s_platform_release_occupation(i2s_num);
+    i2s_platform_release_occupation(I2S_CTLR_HP, i2s_num);
     free(obj);
     p_i2s[i2s_num] = NULL;
     return ESP_OK;
@@ -1648,7 +1656,7 @@ esp_err_t i2s_driver_install(i2s_port_t i2s_num, const i2s_config_t *i2s_config,
     /* Step 2: Allocate driver object and register to platform */
     i2s_obj_t *i2s_obj = calloc(1, sizeof(i2s_obj_t));
     ESP_RETURN_ON_FALSE(i2s_obj, ESP_ERR_NO_MEM, TAG, "no mem for I2S driver");
-    if (i2s_platform_acquire_occupation(i2s_num, "i2s_legacy") != ESP_OK) {
+    if (i2s_platform_acquire_occupation(I2S_CTLR_HP, i2s_num, "i2s_legacy") != ESP_OK) {
         free(i2s_obj);
         ESP_LOGE(TAG, "register I2S object to platform failed");
         return ESP_ERR_INVALID_STATE;
@@ -1656,7 +1664,7 @@ esp_err_t i2s_driver_install(i2s_port_t i2s_num, const i2s_config_t *i2s_config,
     p_i2s[i2s_num] = i2s_obj;
     i2s_hal_init(&i2s_obj->hal, i2s_num);
 
-    /* Step 3: Store and assign configarations */
+    /* Step 3: Store and assign configurations */
     i2s_mode_identify(i2s_num, i2s_config);
     ESP_GOTO_ON_ERROR(i2s_config_transfer(i2s_num, i2s_config), err, TAG, "I2S install failed");
     i2s_obj->dma_desc_num = i2s_config->dma_desc_num;
@@ -1844,7 +1852,7 @@ static void gpio_matrix_out_check_and_set(gpio_num_t gpio, uint32_t signal_idx, 
 {
     //if pin = -1, do not need to configure
     if (gpio != -1) {
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[gpio], PIN_FUNC_GPIO);
+        gpio_func_sel(gpio, PIN_FUNC_GPIO);
         gpio_set_direction(gpio, GPIO_MODE_OUTPUT);
         esp_rom_gpio_connect_out_signal(gpio, signal_idx, out_inv, oen_inv);
     }
@@ -1853,7 +1861,7 @@ static void gpio_matrix_out_check_and_set(gpio_num_t gpio, uint32_t signal_idx, 
 static void gpio_matrix_in_check_and_set(gpio_num_t gpio, uint32_t signal_idx, bool inv)
 {
     if (gpio != -1) {
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[gpio], PIN_FUNC_GPIO);
+        gpio_func_sel(gpio, PIN_FUNC_GPIO);
         /* Set direction, for some GPIOs, the input function are not enabled as default */
         gpio_set_direction(gpio, GPIO_MODE_INPUT);
         esp_rom_gpio_connect_in_signal(gpio, signal_idx, inv);
@@ -1948,7 +1956,7 @@ esp_err_t i2s_set_pin(i2s_port_t i2s_num, const i2s_pin_config_t *pin)
         }
     }
 
-    /* Set data input/ouput GPIO */
+    /* Set data input/output GPIO */
     gpio_matrix_out_check_and_set(pin->data_out_num, i2s_periph_signal[i2s_num].data_out_sig, 0, 0);
     gpio_matrix_in_check_and_set(pin->data_in_num, i2s_periph_signal[i2s_num].data_in_sig, 0);
     return ESP_OK;

@@ -11,7 +11,6 @@
 #include <esp_fault.h>
 #include <esp_log.h>
 #include <esp_attr.h>
-#include <spi_flash_mmap.h>
 #include <bootloader_flash_priv.h>
 #include <bootloader_random.h>
 #include <bootloader_sha.h>
@@ -692,19 +691,28 @@ static esp_err_t process_segment_data(int segment, intptr_t load_addr, uint32_t 
 
     const uint32_t *src = data;
 
-#if CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
     // Case I: Bootloader verifying application
     // Case II: Bootloader verifying bootloader
-    // Anti-rollback check should handle only Case I from above.
+    // The esp_app_desc_t structure is located in DROM and is always in segment #0.
+    // Anti-rollback check and efuse block version check should handle only Case I from above.
     if (segment == 0 && metadata->start_addr != ESP_BOOTLOADER_OFFSET) {
+/* ESP32 doesn't have more memory and more efuse bits for block major version. */
+#if !CONFIG_IDF_TARGET_ESP32
+        const esp_app_desc_t *app_desc = (const esp_app_desc_t *)src;
+        esp_err_t ret = bootloader_common_check_efuse_blk_validity(app_desc->min_efuse_blk_rev_full, app_desc->max_efuse_blk_rev_full);
+        if (ret != ESP_OK) {
+            bootloader_munmap(data);
+            return ret;
+        }
+#endif  // !CONFIG_IDF_TARGET_ESP32
+#if CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
         ESP_LOGD(TAG, "additional anti-rollback check 0x%"PRIx32, data_addr);
-        // The esp_app_desc_t structure is located in DROM and is always in segment #0.
         size_t len = process_esp_app_desc_data(src, sha_handle, checksum, metadata);
         data_len -= len;
         src += len / 4;
         // In BOOTLOADER_BUILD, for DROM (segment #0) we do not load it into dest (only map it), do_load = false.
-    }
 #endif // CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK
+    }
 
     for (size_t i = 0; i < data_len; i += 4) {
         int w_i = i / 4; // Word index
@@ -772,8 +780,14 @@ static esp_err_t verify_segment_header(int index, const esp_image_segment_header
 
 static bool should_map(uint32_t load_addr)
 {
-    return (load_addr >= SOC_IROM_LOW && load_addr < SOC_IROM_HIGH)
-           || (load_addr >= SOC_DROM_LOW && load_addr < SOC_DROM_HIGH);
+    bool is_irom = (load_addr >= SOC_IROM_LOW) && (load_addr < SOC_IROM_HIGH);
+    bool is_drom = (load_addr >= SOC_DROM_LOW) && (load_addr < SOC_DROM_HIGH);
+    bool is_psram = false;
+#if SOC_MMU_PER_EXT_MEM_TARGET
+    is_psram = (load_addr >= SOC_EXTRAM_LOW) && (load_addr < SOC_EXTRAM_HIGH);
+#endif
+
+    return (is_irom || is_drom || is_psram);
 }
 
 static bool should_load(uint32_t load_addr)
@@ -858,7 +872,7 @@ static esp_err_t process_appended_hash_and_sig(esp_image_metadata_t *data, uint3
 
     // Case I: Bootloader part
     if (part_offset == ESP_BOOTLOADER_OFFSET) {
-        // For bootloader with secure boot v1, signature stays in an independant flash
+        // For bootloader with secure boot v1, signature stays in an independent flash
         // sector (offset 0x0)  and does not get appended to the image.
 #if CONFIG_SECURE_BOOT_V2_ENABLED
         // Sanity check - secure boot v2 signature block starts on 4K boundary

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2022-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2022-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -43,7 +43,7 @@
 #define DR_REG_REGDMA_BASE            (DR_REG_HPPERIPH0_BASE + 0x82000)
 #define DR_REG_SDMMC_BASE             (DR_REG_HPPERIPH0_BASE + 0x83000)
 #define DR_REG_H264_CORE_BASE         (DR_REG_HPPERIPH0_BASE + 0x84000)
-#define DR_REG_AHB_PDMA_BASE          (DR_REG_HPPERIPH0_BASE + 0x85000)
+#define DR_REG_AHB_DMA_BASE           (DR_REG_HPPERIPH0_BASE + 0x85000)
 #define DR_REG_JPEG_BASE              (DR_REG_HPPERIPH0_BASE + 0x86000)
 #define DR_REG_PPA_BASE               (DR_REG_HPPERIPH0_BASE + 0x87000)
 #define DR_REG_DMA2D_BASE             (DR_REG_HPPERIPH0_BASE + 0x88000)
@@ -59,11 +59,14 @@
 #define DR_REG_DDRPHY_BASE            (DR_REG_HPPERIPH0_BASE + 0x9D000)
 #define DR_REG_PVT_BASE               (DR_REG_HPPERIPH0_BASE + 0x9E000)
 #define DR_REG_CSI_HOST_BASE          (DR_REG_HPPERIPH0_BASE + 0x9F000)
+#define DR_REG_CSI_BRG_BASE           (DR_REG_HPPERIPH0_BASE + 0x9F800)
 #define DR_REG_DSI_HOST_BASE          (DR_REG_HPPERIPH0_BASE + 0xA0000)
+#define DR_REG_DSI_BRG_BASE           (DR_REG_HPPERIPH0_BASE + 0xA0800)
 #define DR_REG_ISP_BASE               (DR_REG_HPPERIPH0_BASE + 0xA1000)
 #define DR_REG_RMT_BASE               (DR_REG_HPPERIPH0_BASE + 0xA2000)
 #define DR_REG_BITSCRAM_BASE          (DR_REG_HPPERIPH0_BASE + 0xA3000)
 #define DR_REG_AXI_ICM_BASE           (DR_REG_HPPERIPH0_BASE + 0xA4000)
+#define DR_REG_AXI_ICM_QOS_BASE       (DR_REG_AXI_ICM_BASE   + 0x400)
 #define DR_REG_HP_PERI_PMS_BASE       (DR_REG_HPPERIPH0_BASE + 0xA5000)
 #define DR_REG_LP2HP_PERI_PMS_BASE    (DR_REG_HPPERIPH0_BASE + 0xA5800)
 #define DR_REG_DMA_PMS_BASE           (DR_REG_HPPERIPH0_BASE + 0xA6000)
@@ -160,8 +163,10 @@
 /**
  * @brief: Special memory address
  */
+#define LP_I2S_RAM_BASE               0x50125c00
 #define MIPI_CSI_BRG_MEM_BASE         0x50104000
 #define MIPI_DSI_BRG_MEM_BASE         0x50105000
+
 
 /**
  * This are module helper MACROs for quick module reference
@@ -193,17 +198,7 @@
 #define DR_REG_INTERRUPT_CORE1_BASE             (DR_REG_INTR_BASE + 0x800)
 #define DR_REG_LPPERI_BASE                      DR_REG_LP_PERI_CLKRST_BASE
 #define DR_REG_CPU_BUS_MONITOR_BASE             DR_REG_CPU_BUS_MON_BASE
-
-//TODO: IDF-7542
-// #define DR_REG_TEE_BASE                         0x60098000
-// #define DR_REG_HP_APM_BASE                      0x60099000
-// #define DR_REG_LP_APM0_BASE                     0x60099800
-// #define DR_REG_LP_TEE_BASE                      0x600B3400
-// #define DR_REG_LP_APM_BASE                      0x600B3800
-
-//TODO: IDF-7531
-// #define DR_REG_PAU_BASE                         0x60093000
-
-//TODO: IDF-7688
-// #define DR_REG_TRACE_BASE                       0x600C0000
-#define DR_REG_ASSIST_DEBUG_BASE                0x3FF06000
+#define DR_REG_ASSIST_DEBUG_BASE                DR_REG_CPU_BUS_MON_BASE
+#define DR_REG_PAU_BASE                         DR_REG_REGDMA_BASE
+#define DR_REG_SDHOST_BASE                      DR_REG_SDMMC_BASE
+#define DR_REG_TRACE_BASE                       DR_REG_TRACE0_BASE

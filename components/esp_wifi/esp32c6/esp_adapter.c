@@ -32,16 +32,20 @@
 #include "esp_private/esp_modem_clock.h"
 #include "esp_private/wifi_os_adapter.h"
 #include "esp_private/wifi.h"
+#ifdef CONFIG_ESP_PHY_ENABLED
 #include "esp_phy_init.h"
+#include "phy_init_data.h"
+#endif
 #include "soc/rtc_cntl_periph.h"
 #include "soc/rtc.h"
-#include "phy_init_data.h"
 #include "esp_private/periph_ctrl.h"
 #include "esp_private/esp_clk.h"
 #include "nvs.h"
 #include "os.h"
 #include "esp_smartconfig.h"
+#ifdef CONFIG_ESP_COEX_ENABLED
 #include "private/esp_coexist_internal.h"
+#endif
 #include "esp32c6/rom/ets_sys.h"
 #include "private/esp_modem_wrapper.h"
 #include "esp_private/esp_modem_clock.h"
@@ -58,17 +62,17 @@ extern void wifi_apb80m_request(void);
 extern void wifi_apb80m_release(void);
 #endif
 
-IRAM_ATTR void *wifi_malloc( size_t size )
+IRAM_ATTR void *wifi_malloc(size_t size)
 {
     return malloc(size);
 }
 
-IRAM_ATTR void *wifi_realloc( void *ptr, size_t size )
+IRAM_ATTR void *wifi_realloc(void *ptr, size_t size)
 {
     return realloc(ptr, size);
 }
 
-IRAM_ATTR void *wifi_calloc( size_t n, size_t size )
+IRAM_ATTR void *wifi_calloc(size_t n, size_t size)
 {
     return calloc(n, size);
 }
@@ -79,7 +83,7 @@ static void *IRAM_ATTR wifi_zalloc_wrapper(size_t size)
     return ptr;
 }
 
-wifi_static_queue_t *wifi_create_queue( int queue_len, int item_size)
+wifi_static_queue_t *wifi_create_queue(int queue_len, int item_size)
 {
     wifi_static_queue_t *queue = NULL;
 
@@ -88,7 +92,7 @@ wifi_static_queue_t *wifi_create_queue( int queue_len, int item_size)
         return NULL;
     }
 
-    queue->handle = xQueueCreate( queue_len, item_size);
+    queue->handle = xQueueCreate(queue_len, item_size);
     return queue;
 }
 
@@ -391,7 +395,7 @@ static void coex_disable_wrapper(void)
 static IRAM_ATTR uint32_t coex_status_get_wrapper(void)
 {
 #if CONFIG_SW_COEXIST_ENABLE || CONFIG_EXTERNAL_COEX_ENABLE
-    return coex_status_get();
+    return coex_status_get(COEX_STATUS_GET_WIFI_BITMAP);
 #else
     return 0;
 #endif
@@ -519,6 +523,24 @@ static int coex_schm_register_cb_wrapper(int type, int(*cb)(int))
 #endif
 }
 
+static int coex_schm_flexible_period_set_wrapper(uint8_t period)
+{
+#if CONFIG_ESP_COEX_POWER_MANAGEMENT
+    return coex_schm_flexible_period_set(period);
+#else
+    return 0;
+#endif
+}
+
+static uint8_t coex_schm_flexible_period_get_wrapper(void)
+{
+#if CONFIG_ESP_COEX_POWER_MANAGEMENT
+    return coex_schm_flexible_period_get();
+#else
+    return 1;
+#endif
+}
+
 static void IRAM_ATTR esp_empty_wrapper(void)
 {
 
@@ -535,6 +557,18 @@ static void esp_phy_disable_wrapper(void)
     phy_wifi_enable_set(0);
     esp_phy_disable(PHY_MODEM_WIFI);
 }
+
+#if SOC_PM_MODEM_RETENTION_BY_REGDMA
+static void regdma_link_set_write_wait_content_wrapper(void *addr, uint32_t value, uint32_t mask)
+{
+    regdma_link_set_write_wait_content(addr, value, mask);
+}
+
+static void *sleep_retention_find_link_by_id_wrapper(int id)
+{
+    return sleep_retention_find_link_by_id(id);
+}
+#endif
 
 wifi_osi_funcs_t g_wifi_osi_funcs = {
     ._version = ESP_WIFI_OS_ADAPTER_VERSION,
@@ -651,12 +685,12 @@ wifi_osi_funcs_t g_wifi_osi_funcs = {
     ._coex_schm_curr_phase_get = coex_schm_curr_phase_get_wrapper,
     ._coex_register_start_cb = coex_register_start_cb_wrapper,
 #if SOC_PM_MODEM_RETENTION_BY_REGDMA
-    ._regdma_link_set_write_wait_content = regdma_link_set_write_wait_content,
-    ._sleep_retention_find_link_by_id = sleep_retention_find_link_by_id,
-    ._sleep_retention_entries_create = (int (*)(const void *, int, int, int))sleep_retention_entries_create,
-    ._sleep_retention_entries_destroy = sleep_retention_entries_destroy,
+    ._regdma_link_set_write_wait_content = regdma_link_set_write_wait_content_wrapper,
+    ._sleep_retention_find_link_by_id = sleep_retention_find_link_by_id_wrapper,
 #endif
     ._coex_schm_process_restart = coex_schm_process_restart_wrapper,
     ._coex_schm_register_cb = coex_schm_register_cb_wrapper,
+    ._coex_schm_flexible_period_set = coex_schm_flexible_period_set_wrapper,
+    ._coex_schm_flexible_period_get = coex_schm_flexible_period_get_wrapper,
     ._magic = ESP_WIFI_OS_ADAPTER_MAGIC,
 };

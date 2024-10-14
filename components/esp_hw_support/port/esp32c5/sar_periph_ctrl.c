@@ -17,37 +17,32 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
-// #include "esp_private/sar_periph_ctrl.h"
-// #include "esp_private/esp_modem_clock.h"
-// #include "hal/sar_ctrl_ll.h"
+#include "esp_private/sar_periph_ctrl.h"
+#include "esp_private/esp_modem_clock.h"
+#include "hal/sar_ctrl_ll.h"
 
 static const char *TAG = "sar_periph_ctrl";
 extern portMUX_TYPE rtc_spinlock;
 
-// TODO: [ESP32C5] IDF-8701, IDF-8703, IDF-8727
-
 void sar_periph_ctrl_init(void)
 {
-    // sar_ctrl_ll_force_power_ctrl_from_pwdet(true);
+    sar_ctrl_ll_force_power_ctrl_from_pwdet(true);
 
     //Add other periph power control initialisation here
-    ESP_EARLY_LOGW(TAG, "sar_periph_ctrl_init has not implemented on C5 yet");
 }
 
 void sar_periph_ctrl_power_enable(void)
 {
-    // portENTER_CRITICAL_SAFE(&rtc_spinlock);
-    // sar_ctrl_ll_force_power_ctrl_from_pwdet(true);
-    // portEXIT_CRITICAL_SAFE(&rtc_spinlock);
-    ESP_EARLY_LOGW(TAG, "sar_periph_ctrl_power_enable has not implemented on C5 yet");
+    portENTER_CRITICAL_SAFE(&rtc_spinlock);
+    sar_ctrl_ll_force_power_ctrl_from_pwdet(true);
+    portEXIT_CRITICAL_SAFE(&rtc_spinlock);
 }
 
 void sar_periph_ctrl_power_disable(void)
 {
-    // portENTER_CRITICAL_SAFE(&rtc_spinlock);
-    // sar_ctrl_ll_force_power_ctrl_from_pwdet(false);
-    // portEXIT_CRITICAL_SAFE(&rtc_spinlock);
-    ESP_EARLY_LOGW(TAG, "sar_periph_ctrl_power_disable has not implemented on C5 yet");
+    portENTER_CRITICAL_SAFE(&rtc_spinlock);
+    sar_ctrl_ll_force_power_ctrl_from_pwdet(false);
+    portEXIT_CRITICAL_SAFE(&rtc_spinlock);
 }
 
 /**
@@ -60,14 +55,13 @@ static int s_pwdet_power_on_cnt;
 
 static void s_sar_power_acquire(void)
 {
-    // modem_clock_module_enable(PERIPH_MODEM_ADC_COMMON_FE_MODULE);
+    modem_clock_module_enable(PERIPH_MODEM_ADC_COMMON_FE_MODULE);
     portENTER_CRITICAL_SAFE(&rtc_spinlock);
     s_pwdet_power_on_cnt++;
     if (s_pwdet_power_on_cnt == 1) {
-    //     sar_ctrl_ll_set_power_mode_from_pwdet(SAR_CTRL_LL_POWER_ON);
+        sar_ctrl_ll_set_power_mode_from_pwdet(SAR_CTRL_LL_POWER_ON);
     }
     portEXIT_CRITICAL_SAFE(&rtc_spinlock);
-    ESP_EARLY_LOGW(TAG, "s_sar_power_acquire has not implemented on C5 yet");
 }
 
 static void s_sar_power_release(void)
@@ -79,11 +73,10 @@ static void s_sar_power_release(void)
         ESP_LOGE(TAG, "%s called, but s_pwdet_power_on_cnt == 0", __func__);
         abort();
     } else if (s_pwdet_power_on_cnt == 0) {
-        // sar_ctrl_ll_set_power_mode_from_pwdet(SAR_CTRL_LL_POWER_FSM);
+        sar_ctrl_ll_set_power_mode_from_pwdet(SAR_CTRL_LL_POWER_FSM);
     }
     portEXIT_CRITICAL_SAFE(&rtc_spinlock);
-    ESP_EARLY_LOGW(TAG, "s_sar_power_release has not implemented on C5 yet");
-    // modem_clock_module_disable(PERIPH_MODEM_ADC_COMMON_FE_MODULE);
+    modem_clock_module_disable(PERIPH_MODEM_ADC_COMMON_FE_MODULE);
 }
 
 

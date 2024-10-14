@@ -10,9 +10,7 @@
  ******************************************************************************/
 
 #pragma once
-#include "soc/soc_caps.h"
 
-#if SOC_KEY_MANAGER_SUPPORTED
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
@@ -21,7 +19,6 @@
 #include "hal/key_mgr_types.h"
 #include "soc/keymng_reg.h"
 #include "soc/hp_sys_clkrst_struct.h"
-#include "soc/soc_caps.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,29 +26,32 @@ extern "C" {
 
 /**
  * @brief Enable the bus clock for Key Manager peripheral
- *
+ * Note: Please use key_mgr_ll_enable_bus_clock which requires the critical section
+ *       and do not use _key_mgr_ll_enable_bus_clock
  * @param true to enable, false to disable
  */
-static inline void key_mgr_ll_enable_bus_clock(bool enable)
+static inline void _key_mgr_ll_enable_bus_clock(bool enable)
 {
     HP_SYS_CLKRST.soc_clk_ctrl1.reg_key_manager_sys_clk_en = enable;
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
 /// the critical section needs to declare the __DECLARE_RCC_ATOMIC_ENV variable in advance
-#define key_mgr_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; key_mgr_ll_enable_bus_clock(__VA_ARGS__)
+#define key_mgr_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _key_mgr_ll_enable_bus_clock(__VA_ARGS__)
 
 /**
  * @brief Enable the peripheral clock for Key Manager
  *
+ * Note: Please use key_mgr_ll_enable_peripheral_clock which requires the critical section
+ *       and do not use _key_mgr_ll_enable_peripheral_clock
  * @param true to enable, false to disable
  */
-static inline void key_mgr_ll_enable_peripheral_clock(bool enable)
+static inline void _key_mgr_ll_enable_peripheral_clock(bool enable)
 {
     HP_SYS_CLKRST.peri_clk_ctrl25.reg_crypto_km_clk_en = enable;
 }
 
-#define key_mgr_ll_enable_peripheral_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; key_mgr_ll_enable_bus_clock(__VA_ARGS__)
+#define key_mgr_ll_enable_peripheral_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; _key_mgr_ll_enable_peripheral_clock(__VA_ARGS__)
 
 /**
  * @brief Reset the Key Manager peripheral */
@@ -59,6 +59,9 @@ static inline void key_mgr_ll_reset_register(void)
 {
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_km = 1;
     HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_km = 0;
+
+    // Clear reset on parent crypto, otherwise Key Manager is held in reset
+    HP_SYS_CLKRST.hp_rst_en2.reg_rst_en_crypto = 0;
 }
 
 /// use a macro to wrap the function, force the caller to use it in a critical section
@@ -183,7 +186,7 @@ static inline void key_mgr_ll_lock_use_sw_init_key_reg(void)
 /**
  * @brief Set the lock for the use_sw_init_key_reg
  *        After this lock has been set,
- *        The Key manager configuration about whether to use a paricular key from efuse or key manager cannot be changed.
+ *        The Key manager configuration about whether to use a particular key from efuse or key manager cannot be changed.
  */
 static inline void key_mgr_ll_lock_use_efuse_key_reg(esp_key_mgr_key_type_t key_type)
 {
@@ -198,14 +201,14 @@ static inline void key_mgr_ll_lock_use_efuse_key_reg(esp_key_mgr_key_type_t key_
     }
 }
 
-/* @brief Configure the key purpose to be used by the Key Manager for key generator opearation */
+/* @brief Configure the key purpose to be used by the Key Manager for key generator operation */
 static inline void key_mgr_ll_set_key_purpose(const esp_key_mgr_key_purpose_t key_purpose)
 {
     REG_SET_FIELD(KEYMNG_CONF_REG, KEYMNG_KEY_PURPOSE, key_purpose);
 }
 
 /**
- * @brief Configure the mode which is used by the Key Manager for the generator key deployement process
+ * @brief Configure the mode which is used by the Key Manager for the generator key deployment process
  */
 static inline void key_mgr_ll_set_key_generator_mode(const esp_key_mgr_key_generator_mode_t mode)
 {
@@ -341,5 +344,4 @@ static inline uint32_t key_mgr_ll_get_date_info(void)
 
 #ifdef __cplusplus
 }
-#endif
 #endif

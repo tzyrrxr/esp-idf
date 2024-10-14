@@ -7,6 +7,7 @@
 #include "sdkconfig.h"
 #include "esp_assert.h"
 #include "esp_heap_caps.h"
+#include "esp_compiler.h"
 #include "freertos/idf_additions.h"
 #if CONFIG_FREERTOS_ENABLE_TASK_SNAPSHOT
     #include "esp_private/freertos_debug.h"
@@ -408,7 +409,7 @@ BaseType_t xTaskGetCoreID( TaskHandle_t xTask )
         #if CONFIG_FREERTOS_SMP
             UBaseType_t uxCoreAffinityMask;
 
-            /* Get the core affinity mask and covert it to an ID */
+            /* Get the core affinity mask and convert it to an ID */
             uxCoreAffinityMask = vTaskCoreAffinityGet( xTask );
 
             /* If the task is not pinned to a particular core, treat it as tskNO_AFFINITY */
@@ -487,7 +488,7 @@ BaseType_t xTaskGetCoreID( TaskHandle_t xTask )
 
     configRUN_TIME_COUNTER_TYPE ulTaskGetIdleRunTimeCounterForCore( BaseType_t xCoreID )
     {
-        uint32_t ulRunTimeCounter;
+        configRUN_TIME_COUNTER_TYPE ulRunTimeCounter;
 
         configASSERT( taskVALID_CORE_ID( xCoreID ) == pdTRUE );
 
@@ -514,7 +515,11 @@ BaseType_t xTaskGetCoreID( TaskHandle_t xTask )
 
         configASSERT( taskVALID_CORE_ID( xCoreID ) == pdTRUE );
 
-        ulTotalTime = portGET_RUN_TIME_COUNTER_VALUE();
+        #ifdef portALT_GET_RUN_TIME_COUNTER_VALUE
+            portALT_GET_RUN_TIME_COUNTER_VALUE( ulTotalTime );
+        #else
+            ulTotalTime = portGET_RUN_TIME_COUNTER_VALUE();
+        #endif
 
         /* For percentage calculations. */
         ulTotalTime /= ( configRUN_TIME_COUNTER_TYPE ) 100;
@@ -836,11 +841,11 @@ uint8_t * pxTaskGetStackStart( TaskHandle_t xTask )
 /**
  * @brief Get reentrancy structure of the current task
  *
- * - This funciton is required by newlib (when __DYNAMIC_REENT__ is enabled)
+ * - This function is required by newlib (when __DYNAMIC_REENT__ is enabled)
  * - It will return a pointer to the current task's reent struct
  * - If FreeRTOS is not running, it will return the global reent struct
  *
- * @return Pointer to a the (current taks's)/(globa) reent struct
+ * @return Pointer to a the (current taks's)/(global) reent struct
  */
     struct _reent * __getreent( void )
     {
@@ -917,7 +922,7 @@ static List_t * pxGetTaskListByIndex( UBaseType_t uxListIndex )
     {
         pxTaskList = &pxReadyTasksLists[ configMAX_PRIORITIES - 1 - uxListIndex ];
     }
-    else if( uxListIndex < configMAX_PRIORITIES + xNonReadyTaskListsCnt + 1 )
+    else if( uxListIndex < configMAX_PRIORITIES + xNonReadyTaskListsCnt )
     {
         pxTaskList = non_ready_task_lists[ uxListIndex - configMAX_PRIORITIES ];
     }
@@ -1000,7 +1005,7 @@ int xTaskGetNext( TaskIterator_t * xIterator )
         if( !portVALID_LIST_MEM( pxNextListItem ) )
         {
             /* Nothing to do with the corrupted list item. We will skip to the next task state list.
-             * pxNextListItem should be NULL at the beggining of each task list.
+             * pxNextListItem should be NULL at the beginning of each task list.
              */
             pxNextListItem = NULL;
             continue;
@@ -1037,6 +1042,8 @@ int xTaskGetNext( TaskIterator_t * xIterator )
 BaseType_t vTaskGetSnapshot( TaskHandle_t pxTask,
                              TaskSnapshot_t * pxTaskSnapshot )
 {
+    ESP_STATIC_ANALYZER_CHECK(!pxTask, pdFALSE);
+
     if( ( portVALID_TCB_MEM( pxTask ) == false ) || ( pxTaskSnapshot == NULL ) )
     {
         return pdFALSE;

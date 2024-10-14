@@ -67,6 +67,18 @@ config ESP_ROM_HAS_NEWLIB_NANO_FORMAT
     bool
     default y
 
+config ESP_ROM_HAS_NEWLIB_NANO_PRINTF_FLOAT_BUG
+    bool
+    default y
+
 config ESP_ROM_HAS_VERSION
+    bool
+    default y
+
+config ESP_ROM_CLIC_INT_TYPE_PATCH
+    bool
+    default y
+
+config ESP_ROM_HAS_OUTPUT_PUTC_FUNC
     bool
     default y

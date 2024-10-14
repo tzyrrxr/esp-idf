@@ -9,7 +9,6 @@
 
 #pragma once
 
-#include "sdkconfig.h"  // TODO: IDF-9197 remove
 #include "esp_attr.h"
 #include "hal/misc.h"
 #include "hal/uart_types.h"
@@ -62,6 +61,10 @@ extern "C" {
 #define UART_LL_PCR_REG_GET(hw, reg_suffix, field_suffix)  \
     (((hw) == &UART0) ? PCR.uart0_##reg_suffix.uart0_##field_suffix : PCR.uart1_##reg_suffix.uart1_##field_suffix)
 
+// UART sleep retention module
+#define UART_LL_SLEEP_RETENTION_MODULE_ID(uart_num) ((uart_num == UART_NUM_0) ? SLEEP_RETENTION_MODULE_UART0 : \
+                                                     (uart_num == UART_NUM_1) ? SLEEP_RETENTION_MODULE_UART1 : -1)
+
 // Define UART interrupts
 typedef enum {
     UART_INTR_RXFIFO_FULL      = (0x1 << 0),
@@ -112,7 +115,7 @@ FORCE_INLINE_ATTR void lp_uart_ll_get_sclk(uart_dev_t *hw, soc_module_clk_t *sou
     switch (LP_CLKRST.lpperi.lp_uart_clk_sel) {
     default:
     case 0:
-        *source_clk = (soc_module_clk_t)LP_UART_SCLK_LP_FAST;
+        *source_clk = (soc_module_clk_t)LP_UART_SCLK_RC_FAST;
         break;
     case 1:
         *source_clk = (soc_module_clk_t)LP_UART_SCLK_XTAL_D2;
@@ -130,7 +133,7 @@ static inline void lp_uart_ll_set_source_clk(uart_dev_t *hw, soc_periph_lp_uart_
 {
     (void)hw;
     switch (src_clk) {
-    case LP_UART_SCLK_LP_FAST:
+    case LP_UART_SCLK_RC_FAST:
         LP_CLKRST.lpperi.lp_uart_clk_sel = 0;
         break;
     case LP_UART_SCLK_XTAL_D2:
@@ -167,12 +170,7 @@ FORCE_INLINE_ATTR void lp_uart_ll_set_baudrate(uart_dev_t *hw, uint32_t baud, ui
     // an integer part and a fractional part.
     hw->clkdiv_sync.clkdiv_int = clk_div >> 4;
     hw->clkdiv_sync.clkdiv_frag = clk_div & 0xf;
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
     HAL_FORCE_MODIFY_U32_REG_FIELD(hw->clk_conf, sclk_div_num, sclk_div - 1);
-#elif CONFIG_IDF_TARGET_ESP32C5_MP_VERSION
-    // TODO: [ESP32c5] IDF-8633 Not found sclk_div_num for LP_UART
-    abort();
-#endif
     uart_ll_update(hw);
 }
 
@@ -190,6 +188,30 @@ static inline void lp_uart_ll_enable_bus_clock(int hw_id, bool enable)
 
 /// LPPERI.clk_en is a shared register, so this function must be used in an atomic way
 #define lp_uart_ll_enable_bus_clock(...) (void)__DECLARE_RCC_ATOMIC_ENV; lp_uart_ll_enable_bus_clock(__VA_ARGS__)
+
+/**
+ * @brief  Enable the UART clock.
+ *
+ * @param hw_id LP UART instance ID
+ */
+FORCE_INLINE_ATTR void lp_uart_ll_sclk_enable(int hw_id)
+{
+    (void)hw_id;
+    LP_UART.clk_conf.tx_sclk_en = 1;
+    LP_UART.clk_conf.rx_sclk_en = 1;
+}
+
+/**
+ * @brief  Disable the UART clock.
+ *
+ * @param hw_id LP UART instance ID
+ */
+FORCE_INLINE_ATTR void lp_uart_ll_sclk_disable(int hw_id)
+{
+    (void)hw_id;
+    LP_UART.clk_conf.tx_sclk_en = 0;
+    LP_UART.clk_conf.rx_sclk_en = 0;
+}
 
 /**
  * @brief Reset LP UART module
@@ -437,12 +459,7 @@ FORCE_INLINE_ATTR uint32_t uart_ll_get_baudrate(uart_dev_t *hw, uint32_t sclk_fr
     div_reg.val = hw->clkdiv_sync.val;
     int sclk_div;
     if ((hw) == &LP_UART) {
-#if CONFIG_IDF_TARGET_ESP32C5_BETA3_VERSION
         sclk_div = HAL_FORCE_READ_U32_REG_FIELD(hw->clk_conf, sclk_div_num) + 1;
-#elif CONFIG_IDF_TARGET_ESP32C5_MP_VERSION
-        // TODO: [ESP32c5] IDF-8633 Not found sclk_div_num for LP_UART
-        abort();
-#endif
     } else {
         sclk_div = UART_LL_PCR_REG_U32_GET(hw, sclk_conf, sclk_div_num) + 1;
     }
@@ -734,7 +751,7 @@ FORCE_INLINE_ATTR void uart_ll_set_tx_idle_num(uart_dev_t *hw, uint32_t idle_num
 }
 
 /**
- * @brief  Configure the transmiter to send break chars.
+ * @brief  Configure the transmitter to send break chars.
  *
  * @param  hw Beginning address of the peripheral registers.
  * @param  break_num The number of the break chars need to be send.
@@ -801,7 +818,7 @@ FORCE_INLINE_ATTR void uart_ll_get_hw_flow_ctrl(uart_dev_t *hw, uart_hw_flowcont
  * @brief  Configure the software flow control.
  *
  * @param  hw Beginning address of the peripheral registers.
- * @param  flow_ctrl The UART sofware flow control settings.
+ * @param  flow_ctrl The UART software flow control settings.
  * @param  sw_flow_ctrl_en Set true to enable software flow control, otherwise set it false.
  *
  * @return None.
@@ -899,6 +916,17 @@ FORCE_INLINE_ATTR void uart_ll_set_wakeup_thrd(uart_dev_t *hw, uint32_t wakeup_t
 {
     // System would wakeup when the number of positive edges of RxD signal is larger than or equal to (UART_ACTIVE_THRESHOLD+3)
     hw->sleep_conf2.active_threshold = wakeup_thrd - UART_LL_MIN_WAKEUP_THRESH;
+}
+
+/**
+ * @brief   Enable/disable the UART pad clock in sleep_state
+ *
+ * @param hw     Beginning address of the peripheral registers.
+ * @param enable enable or disable
+ */
+FORCE_INLINE_ATTR void uart_ll_enable_pad_sleep_clock(uart_dev_t *hw, bool enable)
+{
+    (void)hw; (void)enable;
 }
 
 /**
@@ -1132,7 +1160,7 @@ FORCE_INLINE_ATTR bool uart_ll_is_hw_cts_en(uart_dev_t *hw)
  * @brief Configure TX signal loop back to RX module, just for the testing purposes
  *
  * @param  hw Beginning address of the peripheral registers.
- * @param  loop_back_en Set ture to enable the loop back function, else set it false.
+ * @param  loop_back_en Set true to enable the loop back function, else set it false.
  *
  * @return None
  */

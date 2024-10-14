@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2023-2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -27,14 +27,16 @@
 #include "esp_intr_alloc.h"
 #include "esp_pm.h"
 #include "soc/parlio_periph.h"
+#include "soc/soc_caps.h"
 #include "hal/parlio_ll.h"
-#include "hal/gpio_hal.h"
 #include "driver/gpio.h"
 #include "driver/parlio_tx.h"
 #include "parlio_private.h"
 #include "esp_memory_utils.h"
 #include "esp_clk_tree.h"
+#include "esp_private/esp_clk_tree_common.h"
 #include "esp_private/gdma.h"
+#include "esp_private/gdma_link.h"
 
 static const char *TAG = "parlio-tx";
 
@@ -50,6 +52,10 @@ typedef struct parlio_tx_unit_t {
     intr_handle_t intr;    // allocated interrupt handle
     esp_pm_lock_handle_t pm_lock;   // power management lock
     gdma_channel_handle_t dma_chan; // DMA channel
+    gdma_link_list_handle_t dma_link; // DMA link list handle
+    size_t dma_nodes_num;           // number of DMA descriptor nodes
+    size_t int_mem_align; // Alignment for internal memory
+    size_t ext_mem_align; // Alignment for external memory
 #if CONFIG_PM_ENABLE
     char pm_lock_name[PARLIO_PM_LOCK_NAME_LEN_MAX]; // pm lock name
 #endif
@@ -64,7 +70,6 @@ typedef struct parlio_tx_unit_t {
     _Atomic parlio_tx_fsm_t fsm;       // Driver FSM state
     parlio_tx_done_callback_t on_trans_done; // callback function when the transmission is done
     void *user_data;                   // user data passed to the callback function
-    parlio_dma_desc_t *dma_nodes; // DMA descriptor nodes
     parlio_tx_trans_desc_t trans_desc_pool[];   // transaction descriptor pool
 } parlio_tx_unit_t;
 
@@ -122,7 +127,9 @@ static esp_err_t parlio_destroy_tx_unit(parlio_tx_unit_t *tx_unit)
         // de-register from group
         parlio_unregister_unit_from_group(&tx_unit->base);
     }
-    free(tx_unit->dma_nodes);
+    if (tx_unit->dma_link) {
+        ESP_RETURN_ON_ERROR(gdma_del_link_list(tx_unit->dma_link), TAG, "delete dma link list failed");
+    }
     free(tx_unit);
     return ESP_OK;
 }
@@ -145,8 +152,7 @@ static esp_err_t parlio_tx_unit_configure_gpio(parlio_tx_unit_t *tx_unit, const 
             ESP_RETURN_ON_ERROR(gpio_config(&gpio_conf), TAG, "config data GPIO failed");
             esp_rom_gpio_connect_out_signal(config->data_gpio_nums[i],
                                             parlio_periph_signals.groups[group_id].tx_units[unit_id].data_sigs[i], false, false);
-            gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[config->data_gpio_nums[i]], PIN_FUNC_GPIO);
-
+            gpio_func_sel(config->data_gpio_nums[i], PIN_FUNC_GPIO);
         }
     }
     // Note: the valid signal will override TXD[PARLIO_LL_TX_DATA_LINE_AS_VALID_SIG]
@@ -156,14 +162,14 @@ static esp_err_t parlio_tx_unit_configure_gpio(parlio_tx_unit_t *tx_unit, const 
         esp_rom_gpio_connect_out_signal(config->valid_gpio_num,
                                         parlio_periph_signals.groups[group_id].tx_units[unit_id].data_sigs[PARLIO_LL_TX_DATA_LINE_AS_VALID_SIG],
                                         false, false);
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[config->valid_gpio_num], PIN_FUNC_GPIO);
+        gpio_func_sel(config->valid_gpio_num, PIN_FUNC_GPIO);
     }
     if (config->clk_out_gpio_num >= 0) {
         gpio_conf.pin_bit_mask = BIT64(config->clk_out_gpio_num);
         ESP_RETURN_ON_ERROR(gpio_config(&gpio_conf), TAG, "config clk out GPIO failed");
         esp_rom_gpio_connect_out_signal(config->clk_out_gpio_num,
                                         parlio_periph_signals.groups[group_id].tx_units[unit_id].clk_out_sig, false, false);
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[config->clk_out_gpio_num], PIN_FUNC_GPIO);
+        gpio_func_sel(config->clk_out_gpio_num, PIN_FUNC_GPIO);
     }
     if (config->clk_in_gpio_num >= 0) {
         gpio_conf.mode = config->flags.io_loop_back ? GPIO_MODE_INPUT_OUTPUT : GPIO_MODE_INPUT;
@@ -171,12 +177,12 @@ static esp_err_t parlio_tx_unit_configure_gpio(parlio_tx_unit_t *tx_unit, const 
         ESP_RETURN_ON_ERROR(gpio_config(&gpio_conf), TAG, "config clk in GPIO failed");
         esp_rom_gpio_connect_in_signal(config->clk_in_gpio_num,
                                        parlio_periph_signals.groups[group_id].tx_units[unit_id].clk_in_sig, false);
-        gpio_hal_iomux_func_sel(GPIO_PIN_MUX_REG[config->clk_in_gpio_num], PIN_FUNC_GPIO);
+        gpio_func_sel(config->clk_in_gpio_num, PIN_FUNC_GPIO);
     }
     return ESP_OK;
 }
 
-static esp_err_t parlio_tx_unit_init_dma(parlio_tx_unit_t *tx_unit)
+static esp_err_t parlio_tx_unit_init_dma(parlio_tx_unit_t *tx_unit, const parlio_tx_unit_config_t *config)
 {
     gdma_channel_alloc_config_t dma_chan_config = {
         .direction = GDMA_CHANNEL_DIRECTION_TX,
@@ -188,6 +194,28 @@ static esp_err_t parlio_tx_unit_init_dma(parlio_tx_unit_t *tx_unit)
         .owner_check = true,
     };
     gdma_apply_strategy(tx_unit->dma_chan, &gdma_strategy_conf);
+
+    // configure DMA transfer parameters
+    gdma_transfer_config_t trans_cfg = {
+        .max_data_burst_size = config->dma_burst_size ? config->dma_burst_size : 16, // Enable DMA burst transfer for better performance,
+        .access_ext_mem = true, // support transmit PSRAM buffer
+    };
+    ESP_RETURN_ON_ERROR(gdma_config_transfer(tx_unit->dma_chan, &trans_cfg), TAG, "config DMA transfer failed");
+    gdma_get_alignment_constraints(tx_unit->dma_chan, &tx_unit->int_mem_align, &tx_unit->ext_mem_align);
+
+    // create DMA link list
+    size_t dma_nodes_num = tx_unit->dma_nodes_num;
+    gdma_link_list_config_t dma_link_config = {
+        .buffer_alignment = 1,
+        .item_alignment = PARLIO_DMA_DESC_ALIGNMENT,
+        .num_items = dma_nodes_num,
+        .flags = {
+            .check_owner = true,
+        },
+    };
+
+    // throw the error to the caller
+    ESP_RETURN_ON_ERROR(gdma_new_link_list(&dma_link_config, &tx_unit->dma_link), TAG, "create DMA link list failed");
     return ESP_OK;
 }
 
@@ -227,7 +255,10 @@ static esp_err_t parlio_select_periph_clock(parlio_tx_unit_t *tx_unit, const par
 #else
     tx_unit->out_clk_freq_hz = hal_utils_calc_clk_div_integer(&clk_info, &clk_div.integer);
 #endif
+    esp_clk_tree_enable_src((soc_module_clk_t)clk_src, true);
     PARLIO_CLOCK_SRC_ATOMIC() {
+        // turn on the tx module clock to sync the register configuration to the module
+        parlio_ll_tx_enable_clock(hal->regs, true);
         parlio_ll_tx_set_clock_source(hal->regs, clk_src);
         // set clock division
         parlio_ll_tx_set_clock_div(hal->regs, &clk_div);
@@ -247,36 +278,34 @@ esp_err_t parlio_new_tx_unit(const parlio_tx_unit_config_t *config, parlio_tx_un
 #endif
     esp_err_t ret = ESP_OK;
     parlio_tx_unit_t *unit = NULL;
-    ESP_GOTO_ON_FALSE(config && ret_unit, ESP_ERR_INVALID_ARG, err, TAG, "invalid argument");
+    ESP_RETURN_ON_FALSE(config && ret_unit, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     size_t data_width = config->data_width;
     // data_width must be power of 2 and less than or equal to SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH
-    ESP_GOTO_ON_FALSE(data_width && (data_width <= SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH) && ((data_width & (data_width - 1)) == 0),
-                      ESP_ERR_INVALID_ARG, err, TAG, "invalid data width");
+    ESP_RETURN_ON_FALSE(data_width && (data_width <= SOC_PARLIO_TX_UNIT_MAX_DATA_WIDTH) && ((data_width & (data_width - 1)) == 0),
+                        ESP_ERR_INVALID_ARG, TAG, "invalid data width");
     // data_width must not conflict with the valid signal
-    ESP_GOTO_ON_FALSE(!(config->valid_gpio_num >= 0 && data_width > PARLIO_LL_TX_DATA_LINE_AS_VALID_SIG),
-                      ESP_ERR_INVALID_ARG, err, TAG, "valid signal conflicts with data signal");
-    ESP_GOTO_ON_FALSE(config->max_transfer_size && config->max_transfer_size <= PARLIO_LL_TX_MAX_BITS_PER_FRAME / 8,
-                      ESP_ERR_INVALID_ARG, err, TAG, "invalid max transfer size");
+    ESP_RETURN_ON_FALSE(!(config->valid_gpio_num >= 0 && data_width > PARLIO_LL_TX_DATA_LINE_AS_VALID_SIG),
+                        ESP_ERR_INVALID_ARG, TAG, "valid signal conflicts with data signal");
+    ESP_RETURN_ON_FALSE(config->max_transfer_size && config->max_transfer_size <= PARLIO_LL_TX_MAX_BITS_PER_FRAME / 8,
+                        ESP_ERR_INVALID_ARG, TAG, "invalid max transfer size");
 #if SOC_PARLIO_TX_CLK_SUPPORT_GATING
     // clock gating is controlled by either the MSB bit of data bus or the valid signal
-    ESP_GOTO_ON_FALSE(!(config->flags.clk_gate_en && config->valid_gpio_num < 0 && config->data_width <= PARLIO_LL_TX_DATA_LINE_AS_CLK_GATE),
-                      ESP_ERR_INVALID_ARG, err, TAG, "no gpio can control the clock gating");
+    ESP_RETURN_ON_FALSE(!(config->flags.clk_gate_en && config->valid_gpio_num < 0 && config->data_width <= PARLIO_LL_TX_DATA_LINE_AS_CLK_GATE),
+                        ESP_ERR_INVALID_ARG, TAG, "no gpio can control the clock gating");
 #else
-    ESP_GOTO_ON_FALSE(config->flags.clk_gate_en == 0, ESP_ERR_NOT_SUPPORTED, err, TAG, "clock gating is not supported");
+    ESP_RETURN_ON_FALSE(config->flags.clk_gate_en == 0, ESP_ERR_NOT_SUPPORTED, TAG, "clock gating is not supported");
 #endif // SOC_PARLIO_TX_CLK_SUPPORT_GATING
 
     // malloc unit memory
-    unit = heap_caps_calloc(1, sizeof(parlio_tx_unit_t) + sizeof(parlio_tx_trans_desc_t) * config->trans_queue_depth, PARLIO_MEM_ALLOC_CAPS);
+    uint32_t mem_caps = PARLIO_MEM_ALLOC_CAPS;
+    unit = heap_caps_calloc(1, sizeof(parlio_tx_unit_t) + sizeof(parlio_tx_trans_desc_t) * config->trans_queue_depth, mem_caps);
     ESP_GOTO_ON_FALSE(unit, ESP_ERR_NO_MEM, err, TAG, "no memory for tx unit");
-    size_t dma_nodes_num = config->max_transfer_size / DMA_DESCRIPTOR_BUFFER_MAX_SIZE + 1;
-    // DMA descriptors must be placed in internal SRAM
 
-    unit->dma_nodes = heap_caps_aligned_calloc(PARLIO_DMA_DESC_ALIGNMENT, dma_nodes_num, sizeof(parlio_dma_desc_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
-    ESP_GOTO_ON_FALSE(unit->dma_nodes, ESP_ERR_NO_MEM, err, TAG, "no memory for DMA nodes");
-    // Link the descriptors
-    for (int i = 0; i < dma_nodes_num; i++) {
-        unit->dma_nodes[i].next = (i == dma_nodes_num - 1) ? NULL : &(unit->dma_nodes[i + 1]);
-    }
+    // create DMA descriptors
+    // DMA descriptors must be placed in internal SRAM
+    size_t dma_nodes_num = config->max_transfer_size / DMA_DESCRIPTOR_BUFFER_MAX_SIZE + 1;
+    unit->dma_nodes_num = dma_nodes_num;
+
     unit->max_transfer_bits = config->max_transfer_size * 8;
     unit->base.dir = PARLIO_DIR_TX;
     unit->data_width = data_width;
@@ -298,7 +327,7 @@ esp_err_t parlio_new_tx_unit(const parlio_tx_unit_config_t *config, parlio_tx_un
     ESP_GOTO_ON_ERROR(ret, err, TAG, "install interrupt failed");
 
     // install DMA service
-    ESP_GOTO_ON_ERROR(parlio_tx_unit_init_dma(unit), err, TAG, "install tx DMA failed");
+    ESP_GOTO_ON_ERROR(parlio_tx_unit_init_dma(unit, config), err, TAG, "install tx DMA failed");
 
     // reset fifo and core clock domain
     PARLIO_RCC_ATOMIC() {
@@ -329,8 +358,8 @@ esp_err_t parlio_new_tx_unit(const parlio_tx_unit_config_t *config, parlio_tx_un
     parlio_ll_tx_set_sample_clock_edge(hal->regs, config->sample_edge);
 
 #if SOC_PARLIO_TX_SIZE_BY_DMA
-    // Always use DMA EOF as the Parlio TX EOF
-    parlio_ll_tx_set_eof_condition(hal->regs, PARLIO_LL_TX_EOF_COND_DMA_EOF);
+    // Always use DATA LEN EOF as the Parlio TX EOF
+    parlio_ll_tx_set_eof_condition(hal->regs, PARLIO_LL_TX_EOF_COND_DATA_LEN);
 #endif  // SOC_PARLIO_TX_SIZE_BY_DMA
 
     // clear any pending interrupt
@@ -360,30 +389,6 @@ esp_err_t parlio_del_tx_unit(parlio_tx_unit_handle_t unit)
     ESP_RETURN_ON_FALSE(atomic_load(&unit->fsm) == PARLIO_TX_FSM_INIT, ESP_ERR_INVALID_STATE, TAG, "unit not in init state");
     ESP_LOGD(TAG, "del tx unit(%d,%d)", unit->base.group->group_id, unit->base.unit_id);
     return parlio_destroy_tx_unit(unit);
-}
-
-static void IRAM_ATTR parlio_tx_mount_dma_data(parlio_dma_desc_t *desc_head, const void *buffer, size_t len)
-{
-    size_t prepared_length = 0;
-    uint8_t *data = (uint8_t *)buffer;
-    parlio_dma_desc_t *desc = desc_head;
-
-    while (len) {
-        parlio_dma_desc_t *non_cache_desc = PARLIO_GET_NON_CACHED_DESC_ADDR(desc);
-        uint32_t mount_bytes = len > DMA_DESCRIPTOR_BUFFER_MAX_SIZE ? DMA_DESCRIPTOR_BUFFER_MAX_SIZE : len;
-        len -= mount_bytes;
-        non_cache_desc->dw0.suc_eof = len == 0;    // whether the last frame
-        non_cache_desc->dw0.size = mount_bytes;
-        non_cache_desc->dw0.length = mount_bytes;
-        non_cache_desc->dw0.owner = DMA_DESCRIPTOR_BUFFER_OWNER_DMA;
-        non_cache_desc->buffer = &data[prepared_length];
-        desc = desc->next; // move to next descriptor
-        prepared_length += mount_bytes;
-    }
-#if CONFIG_IDF_TARGET_ESP32P4
-    // Write back to cache to synchronize the cache before DMA start
-    Cache_WriteBack_Addr(CACHE_MAP_L1_DCACHE, (uint32_t)buffer, len);
-#endif  // CONFIG_IDF_TARGET_ESP32P4
 }
 
 esp_err_t parlio_tx_unit_wait_all_done(parlio_tx_unit_handle_t tx_unit, int timeout_ms)
@@ -428,7 +433,15 @@ static void IRAM_ATTR parlio_tx_do_transaction(parlio_tx_unit_t *tx_unit, parlio
     tx_unit->cur_trans = t;
 
     // DMA transfer data based on bytes not bits, so convert the bit length to bytes, round up
-    parlio_tx_mount_dma_data(tx_unit->dma_nodes, t->payload, (t->payload_bits + 7) / 8);
+    gdma_buffer_mount_config_t mount_config = {
+        .buffer = (void *)t->payload,
+        .length = (t->payload_bits + 7) / 8,
+        .flags = {
+            .mark_eof = true,
+            .mark_final = true, // singly link list, mark final descriptor
+        }
+    };
+    gdma_link_mount_buffers(tx_unit->dma_link, 0, &mount_config, 1, NULL);
 
     parlio_ll_tx_reset_fifo(hal->regs);
     PARLIO_RCC_ATOMIC() {
@@ -437,7 +450,7 @@ static void IRAM_ATTR parlio_tx_do_transaction(parlio_tx_unit_t *tx_unit, parlio
     parlio_ll_tx_set_idle_data_value(hal->regs, t->idle_value);
     parlio_ll_tx_set_trans_bit_len(hal->regs, t->payload_bits);
 
-    gdma_start(tx_unit->dma_chan, (intptr_t)tx_unit->dma_nodes);
+    gdma_start(tx_unit->dma_chan, gdma_link_get_head_addr(tx_unit->dma_link));
     // wait until the data goes from the DMA to TX unit's FIFO
     while (parlio_ll_tx_is_ready(hal->regs) == false);
     // turn on the core clock after we start the TX unit
@@ -529,10 +542,29 @@ esp_err_t parlio_tx_unit_transmit(parlio_tx_unit_handle_t tx_unit, const void *p
     ESP_RETURN_ON_FALSE((payload_bits % 8) == 0, ESP_ERR_INVALID_ARG, TAG, "payload bit length must be multiple of 8");
 #endif // !SOC_PARLIO_TRANS_BIT_ALIGN
 
-    // acquire one transaction description from ready queue or complete queue
+    size_t cache_line_size = 0;
+    size_t alignment = 0;
+    uint8_t cache_type = 0;
+    esp_ptr_external_ram(payload) ? (alignment = tx_unit->ext_mem_align, cache_type = CACHE_LL_LEVEL_EXT_MEM) : (alignment = tx_unit->int_mem_align, cache_type = CACHE_LL_LEVEL_INT_MEM);
+    // check alignment
+    ESP_RETURN_ON_FALSE(((uint32_t)payload & (alignment - 1)) == 0, ESP_ERR_INVALID_ARG, TAG, "payload address not aligned");
+    ESP_RETURN_ON_FALSE((payload_bits & (alignment - 1)) == 0, ESP_ERR_INVALID_ARG, TAG, "payload size not aligned");
+    cache_line_size = cache_hal_get_cache_line_size(cache_type, CACHE_TYPE_DATA);
+
+    if (cache_line_size > 0) {
+        // Write back to cache to synchronize the cache before DMA start
+        ESP_RETURN_ON_ERROR(esp_cache_msync((void *)payload, (payload_bits + 7) / 8,
+                                            ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED), TAG, "cache sync failed");
+    }
+
+    TickType_t queue_wait_ticks = portMAX_DELAY;
+    if (config->flags.queue_nonblocking) {
+        queue_wait_ticks = 0;
+    }
     parlio_tx_trans_desc_t *t = NULL;
+    // acquire one transaction description from ready queue or complete queue
     if (xQueueReceive(tx_unit->trans_queues[PARLIO_TX_QUEUE_READY], &t, 0) != pdTRUE) {
-        if (xQueueReceive(tx_unit->trans_queues[PARLIO_TX_QUEUE_COMPLETE], &t, 0) == pdTRUE) {
+        if (xQueueReceive(tx_unit->trans_queues[PARLIO_TX_QUEUE_COMPLETE], &t, queue_wait_ticks) == pdTRUE) {
             tx_unit->num_trans_inflight--;
         }
     }

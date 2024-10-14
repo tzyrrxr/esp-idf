@@ -381,8 +381,6 @@ static void test_hd_loop(const void* arg1, void* arg2)
             wait_rdbuf_sig(context, portMAX_DELAY);
 
             ESP_LOGI("mem", "pos: %d, len: %d", pos, len);
-            // ESP_LOG_BUFFER_HEX("recv_buffer", recv_buffer, len);
-            // ESP_LOG_BUFFER_HEX("mem", &mem_ptr[pos], len);
             TEST_ASSERT_EQUAL_HEX8_ARRAY(&mem_ptr[pos], recv_buffer, len);
         }
 
@@ -922,7 +920,7 @@ void prepare_data(uint8_t *buff, uint32_t len, int8_t diff)
 void slave_run_append(void)
 {
     spi_bus_config_t bus_cfg = SPI_BUS_TEST_DEFAULT_CONFIG();
-    bus_cfg.max_transfer_sz = 40000;    //will prepare 40000/DMA_MAX_BUFF_SIZE +1 dma desciptor for use
+    bus_cfg.max_transfer_sz = 40000;    //will prepare 40000/DMA_MAX_BUFF_SIZE +1 dma descriptor for use
 
     spi_slave_hd_slot_config_t slave_hd_cfg = SPI_SLOT_TEST_DEFAULT_CONFIG();
     slave_hd_cfg.flags |= SPI_SLAVE_HD_APPEND_MODE;

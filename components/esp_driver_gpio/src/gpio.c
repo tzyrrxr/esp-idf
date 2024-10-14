@@ -20,15 +20,8 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "hal/gpio_hal.h"
-#include "esp_rom_gpio.h"
 #include "esp_private/esp_gpio_reserve.h"
-#include "esp_private/periph_ctrl.h"
-
-#if SOC_LP_IO_CLOCK_IS_INDEPENDENT && !SOC_RTCIO_RCC_IS_INDEPENDENT
-#define RTCIO_RCC_ATOMIC() PERIPH_RCC_ATOMIC()
-#else
-#define RTCIO_RCC_ATOMIC()
-#endif
+#include "esp_private/io_mux.h"
 
 #if (SOC_RTCIO_PIN_COUNT > 0)
 #include "hal/rtc_io_hal.h"
@@ -66,9 +59,6 @@ typedef struct {
     gpio_isr_func_t *gpio_isr_func;
     gpio_isr_handle_t gpio_isr_handle;
     uint64_t isr_clr_on_entry_mask; // for edge-triggered interrupts, interrupt status bits should be cleared before entering per-pin handlers
-#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP && SOC_LP_IO_CLOCK_IS_INDEPENDENT
-    uint32_t gpio_wakeup_mask;
-#endif
 } gpio_context_t;
 
 static gpio_hal_context_t _gpio_hal = {
@@ -81,9 +71,6 @@ static gpio_context_t gpio_context = {
     .isr_core_id = GPIO_ISR_CORE_ID_UNINIT,
     .gpio_isr_func = NULL,
     .isr_clr_on_entry_mask = 0,
-#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP && SOC_LP_IO_CLOCK_IS_INDEPENDENT
-    .gpio_wakeup_mask = 0,
-#endif
 };
 
 esp_err_t gpio_pullup_en(gpio_num_t gpio_num)
@@ -98,7 +85,7 @@ esp_err_t gpio_pullup_en(gpio_num_t gpio_num)
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         rtc_gpio_pullup_en(gpio_num);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -117,7 +104,7 @@ esp_err_t gpio_pullup_dis(gpio_num_t gpio_num)
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         rtc_gpio_pullup_dis(gpio_num);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -136,7 +123,7 @@ esp_err_t gpio_pulldown_en(gpio_num_t gpio_num)
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         rtc_gpio_pulldown_en(gpio_num);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -155,7 +142,7 @@ esp_err_t gpio_pulldown_dis(gpio_num_t gpio_num)
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         rtc_gpio_pulldown_dis(gpio_num);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -209,36 +196,37 @@ static esp_err_t gpio_input_disable(gpio_num_t gpio_num)
     return ESP_OK;
 }
 
-static esp_err_t gpio_input_enable(gpio_num_t gpio_num)
+esp_err_t gpio_input_enable(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
     gpio_hal_input_enable(gpio_context.gpio_hal, gpio_num);
     return ESP_OK;
 }
 
-static esp_err_t gpio_output_disable(gpio_num_t gpio_num)
+esp_err_t gpio_output_disable(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
     gpio_hal_output_disable(gpio_context.gpio_hal, gpio_num);
+    gpio_hal_matrix_out_default(gpio_context.gpio_hal, gpio_num); // Ensure no other output signal is routed via GPIO matrix to this pin
     return ESP_OK;
 }
 
 static esp_err_t gpio_output_enable(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_OUTPUT_GPIO(gpio_num), "GPIO output gpio_num error", ESP_ERR_INVALID_ARG);
+    gpio_hal_matrix_out_default(gpio_context.gpio_hal, gpio_num); // No peripheral output signal routed to the pin, just as a simple GPIO output
     gpio_hal_output_enable(gpio_context.gpio_hal, gpio_num);
-    esp_rom_gpio_connect_out_signal(gpio_num, SIG_GPIO_OUT_IDX, false, false);
     return ESP_OK;
 }
 
-static esp_err_t gpio_od_disable(gpio_num_t gpio_num)
+esp_err_t gpio_od_disable(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
     gpio_hal_od_disable(gpio_context.gpio_hal, gpio_num);
     return ESP_OK;
 }
 
-static esp_err_t gpio_od_enable(gpio_num_t gpio_num)
+esp_err_t gpio_od_enable(gpio_num_t gpio_num)
 {
     GPIO_CHECK(GPIO_IS_VALID_GPIO(gpio_num), "GPIO number error", ESP_ERR_INVALID_ARG);
     gpio_hal_od_enable(gpio_context.gpio_hal, gpio_num);
@@ -639,6 +627,11 @@ esp_err_t gpio_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
     if ((intr_type == GPIO_INTR_LOW_LEVEL) || (intr_type == GPIO_INTR_HIGH_LEVEL)) {
 #if SOC_RTCIO_WAKE_SUPPORTED
         if (rtc_gpio_is_valid_gpio(gpio_num)) {
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+            // LP_IO Wake-up function does not depend on LP_IO Matrix, but uses its clock to
+            // sample the wake-up signal, we need to enable the LP_IO clock here.
+            io_mux_enable_lp_io_clock(gpio_num, true);
+#endif
             ret = rtc_gpio_wakeup_enable(gpio_num, intr_type);
         }
 #endif
@@ -664,6 +657,9 @@ esp_err_t gpio_wakeup_disable(gpio_num_t gpio_num)
 #if SOC_RTCIO_WAKE_SUPPORTED
     if (rtc_gpio_is_valid_gpio(gpio_num)) {
         ret = rtc_gpio_wakeup_disable(gpio_num);
+#if SOC_LP_IO_CLOCK_IS_INDEPENDENT
+        io_mux_enable_lp_io_clock(gpio_num, false);
+#endif
     }
 #endif
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
@@ -689,7 +685,7 @@ esp_err_t gpio_set_drive_capability(gpio_num_t gpio_num, gpio_drive_cap_t streng
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         ret = rtc_gpio_set_drive_capability(gpio_num, strength);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -710,7 +706,7 @@ esp_err_t gpio_get_drive_capability(gpio_num_t gpio_num, gpio_drive_cap_t *stren
 #if SOC_RTCIO_INPUT_OUTPUT_SUPPORTED
         ret = rtc_gpio_get_drive_capability(gpio_num, strength);
 #else
-        abort(); // This should be eliminated as unreachable, unless a programming error has occured
+        abort(); // This should be eliminated as unreachable, unless a programming error has occurred
 #endif
     }
 
@@ -757,7 +753,7 @@ esp_err_t gpio_hold_dis(gpio_num_t gpio_num)
     return ret;
 }
 
-#if !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#if SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 void gpio_deep_sleep_hold_en(void)
 {
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
@@ -771,7 +767,7 @@ void gpio_deep_sleep_hold_dis(void)
     gpio_hal_deep_sleep_hold_dis(gpio_context.gpio_hal);
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
 }
-#endif //!SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+#endif //SOC_GPIO_SUPPORT_HOLD_IO_IN_DSLP && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
 
 #if SOC_GPIO_SUPPORT_FORCE_HOLD
 esp_err_t IRAM_ATTR gpio_force_hold_all()
@@ -802,9 +798,9 @@ void gpio_iomux_in(uint32_t gpio, uint32_t signal_idx)
     gpio_hal_iomux_in(gpio_context.gpio_hal, gpio, signal_idx);
 }
 
-void gpio_iomux_out(uint8_t gpio_num, int func, bool oen_inv)
+void gpio_iomux_out(uint8_t gpio_num, int func, bool out_en_inv)
 {
-    gpio_hal_iomux_out(gpio_context.gpio_hal, gpio_num, func, (uint32_t)oen_inv);
+    gpio_hal_iomux_out(gpio_context.gpio_hal, gpio_num, func, (uint32_t)out_en_inv);
 }
 
 static esp_err_t gpio_sleep_pullup_en(gpio_num_t gpio_num)
@@ -979,7 +975,7 @@ esp_err_t gpio_sleep_pupd_config_unapply(gpio_num_t gpio_num)
 }
 #endif // CONFIG_GPIO_ESP32_SUPPORT_SWITCH_SLP_PULL
 
-#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
+#if SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP && SOC_DEEP_SLEEP_SUPPORTED
 esp_err_t gpio_deep_sleep_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t intr_type)
 {
     if (!GPIO_IS_DEEP_SLEEP_WAKEUP_VALID_GPIO(gpio_num)) {
@@ -992,12 +988,7 @@ esp_err_t gpio_deep_sleep_wakeup_enable(gpio_num_t gpio_num, gpio_int_type_t int
     }
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
 #if SOC_LP_IO_CLOCK_IS_INDEPENDENT
-    if (gpio_context.gpio_wakeup_mask == 0) {
-        RTCIO_RCC_ATOMIC() {
-            rtcio_ll_enable_io_clock(true);
-        }
-    }
-    gpio_context.gpio_wakeup_mask |= (1ULL << gpio_num);
+    io_mux_enable_lp_io_clock(gpio_num, true);
 #endif
     gpio_hal_deepsleep_wakeup_enable(gpio_context.gpio_hal, gpio_num, intr_type);
 #if CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
@@ -1019,17 +1010,12 @@ esp_err_t gpio_deep_sleep_wakeup_disable(gpio_num_t gpio_num)
     gpio_hal_sleep_sel_en(gpio_context.gpio_hal, gpio_num);
 #endif
 #if SOC_LP_IO_CLOCK_IS_INDEPENDENT
-    gpio_context.gpio_wakeup_mask &= ~(1ULL << gpio_num);
-    if (gpio_context.gpio_wakeup_mask == 0) {
-        RTCIO_RCC_ATOMIC() {
-            rtcio_ll_enable_io_clock(false);
-        }
-    }
+    io_mux_enable_lp_io_clock(gpio_num, false);
 #endif
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     return ESP_OK;
 }
-#endif // SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
+#endif // SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP && SOC_DEEP_SLEEP_SUPPORTED
 
 esp_err_t gpio_dump_io_configuration(FILE *out_stream, uint64_t io_bit_mask)
 {

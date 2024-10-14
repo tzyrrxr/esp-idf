@@ -472,6 +472,13 @@ static void IRAM_ATTR non_shared_intr_isr(void *arg)
 }
 #endif
 
+
+bool esp_intr_ptr_in_isr_region(void* ptr)
+{
+    return esp_ptr_in_iram(ptr) || esp_ptr_in_rtc_iram_fast(ptr) || esp_ptr_in_rom(ptr);
+}
+
+
 //We use ESP_EARLY_LOG* here because this can be called before the scheduler is running.
 esp_err_t esp_intr_alloc_intrstatus(int source, int flags, uint32_t intrstatusreg, uint32_t intrstatusmask, intr_handler_t handler,
                                     void *arg, intr_handle_t *ret_handle)
@@ -499,7 +506,7 @@ esp_err_t esp_intr_alloc_intrstatus(int source, int flags, uint32_t intrstatusre
     //ToDo: if we are to allow placing interrupt handlers into the 0x400c0000—0x400c2000 region,
     //we need to make sure the interrupt is connected to the CPU0.
     //CPU1 does not have access to the RTC fast memory through this region.
-    if ((flags & ESP_INTR_FLAG_IRAM) && handler && !esp_ptr_in_iram(handler) && !esp_ptr_in_rtc_iram_fast(handler)) {
+    if ((flags & ESP_INTR_FLAG_IRAM) && handler && !esp_intr_ptr_in_isr_region(handler)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -630,7 +637,7 @@ esp_err_t esp_intr_alloc_intrstatus(int source, int flags, uint32_t intrstatusre
         esp_intr_disable(ret);
     }
 
-#ifdef SOC_CPU_HAS_FLEXIBLE_INTC
+#if SOC_CPU_HAS_FLEXIBLE_INTC
     //Extract the level from the interrupt passed flags
     int level = esp_intr_flags_to_level(flags);
     esp_cpu_intr_set_priority(intr, level);
@@ -640,6 +647,11 @@ esp_err_t esp_intr_alloc_intrstatus(int source, int flags, uint32_t intrstatusre
     } else {
         esp_cpu_intr_set_type(intr, ESP_CPU_INTR_TYPE_LEVEL);
     }
+#endif
+
+#if SOC_INT_PLIC_SUPPORTED
+    /* Make sure the interrupt is not delegated to user mode (IDF uses machine mode only) */
+    RV_CLEAR_CSR(mideleg, BIT(intr));
 #endif
 
     portEXIT_CRITICAL(&spinlock);

@@ -15,10 +15,7 @@
 #include "esp_efuse_table.h"
 #include "esp_log.h"
 #include "hal/wdt_hal.h"
-
-#if SOC_KEY_MANAGER_SUPPORTED
-#include "hal/key_mgr_hal.h"
-#endif
+#include "sdkconfig.h"
 
 #ifdef CONFIG_SOC_EFUSE_CONSISTS_OF_ONE_KEY_BLOCK
 #include "soc/sensitive_reg.h"
@@ -214,6 +211,7 @@ static esp_err_t check_and_generate_encryption_keys(void)
         }
         ESP_LOGI(TAG, "Using pre-loaded flash encryption key in efuse");
     }
+
     return ESP_OK;
 }
 
@@ -258,6 +256,11 @@ esp_err_t esp_flash_encrypt_contents(void)
 
 #ifdef CONFIG_SOC_EFUSE_CONSISTS_OF_ONE_KEY_BLOCK
     REG_WRITE(SENSITIVE_XTS_AES_KEY_UPDATE_REG, 1);
+#endif
+
+// TODO: Remove C5 target config after key manager LL support- see IDF-8621
+#if CONFIG_SOC_KEY_MANAGER_FE_KEY_DEPLOY || CONFIG_IDF_TARGET_ESP32C5
+    esp_flash_encryption_enable_key_mgr();
 #endif
 
     err = encrypt_bootloader();
@@ -407,7 +410,7 @@ static esp_err_t encrypt_partition(int index, const esp_partition_info_t *partit
                                &partition->pos,
                                &image_data);
         should_encrypt = (err == ESP_OK);
-#ifdef SECURE_FLASH_ENCRYPT_ONLY_IMAGE_LEN_IN_APP_PART
+#ifdef CONFIG_SECURE_FLASH_ENCRYPT_ONLY_IMAGE_LEN_IN_APP_PART
         if (should_encrypt) {
             // Encrypt only the app image instead of encrypting the whole partition
             size = image_data.image_len;
